@@ -10,6 +10,7 @@
     scripts/build-test.sh
     scripts/smoke-test.sh --scan
     scripts/desktop-test.sh
+    scripts/signal-test.sh
 
 <code>build-test.sh</code> 依次运行 fmt、clippy、整个 workspace 的测试和 release 构建，
 日志写入 <code>build-test.log</code>。原始命令是：
@@ -17,6 +18,11 @@
     cargo test --workspace
     cargo clippy --workspace --all-targets -- -D warnings
     cargo fmt --all --check
+
+<code>scripts/signal-test.sh</code> 是字面意义上的 <code>dbus-monitor</code>
+黄金序列：私有总线、强度交替的 fake wpa、两次 RequestScan，然后检查标准
+<code>PropertiesChanged</code>、<code>AccessPointAdded</code> 和随后的
+<code>Strength</code> 更新。<code>build-test.sh</code> 在工具和 wlan0 枚举可用时运行它。
 
 测试套件包含：
 

@@ -90,6 +90,15 @@ else
     step "cargo build --release (daemon)" cargo build --release -p nm-freebsd-daemon
 fi
 
+if [ -x scripts/signal-test.sh ] && command -v dbus-monitor >/dev/null 2>&1 && \
+    command -v dbus-daemon >/dev/null 2>&1 && command -v gdbus >/dev/null 2>&1 && \
+    command -v ifconfig >/dev/null 2>&1 && ifconfig wlan0 >/dev/null 2>&1 && \
+    python3 -c 'import dbus' >/dev/null 2>&1; then
+    step "dbus-monitor signal sequence" scripts/signal-test.sh
+else
+    printf '\n== dbus-monitor signal sequence ==\nSKIPPED (tools, dbus-python or wlan0 missing)\n'
+fi
+
 printf '\n== artifacts ==\n'
 ls -lh target/release/nm-freebsd-daemon
 if [ "$with_plugin" -eq 1 ]; then

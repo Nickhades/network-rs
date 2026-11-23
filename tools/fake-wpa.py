@@ -7,6 +7,8 @@ import time
 
 path = sys.argv[1]
 connected = "--disconnected" not in sys.argv
+alternate_strength = os.environ.get("FAKE_WPA_ALTERNATE") == "1"
+scan_count = 0
 
 parent = os.path.dirname(path)
 if parent:
@@ -29,12 +31,15 @@ SCAN = (
 )
 
 def response(cmd):
-    global connected
+    global connected, scan_count
     if cmd == "ATTACH":
         return b"OK\n"
     if cmd == "SCAN":
         return b"OK\n"
     if cmd == "SCAN_RESULTS":
+        scan_count += 1
+        if alternate_strength and scan_count % 2 == 0:
+            return SCAN.replace("\t-42\t", "\t-70\t").encode()
         return SCAN.encode()
     if cmd == "STATUS":
         if connected:

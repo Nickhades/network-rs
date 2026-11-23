@@ -11,6 +11,7 @@ scripts/check-deps.sh --with-plugin
 scripts/build-test.sh
 scripts/smoke-test.sh --scan
 scripts/desktop-test.sh
+scripts/signal-test.sh
 ```
 
 `build-test.sh` runs fmt, clippy, the whole workspace test suite and a release
@@ -21,6 +22,12 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
+
+`scripts/signal-test.sh` is the literal `dbus-monitor` golden sequence:
+private bus, fake wpa with alternating strength, two RequestScan calls, then
+checks for standard `PropertiesChanged`, `AccessPointAdded` and a later
+`Strength` update. `build-test.sh` runs it when the tools and wlan0 enumeration
+are available.
 
 The suite contains:
 

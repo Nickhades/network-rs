@@ -17,6 +17,9 @@ deps:
 smoke:
 	./scripts/smoke-test.sh --scan --plugin
 
+signal:
+	./scripts/signal-test.sh
+
 desktop:
 	./scripts/desktop-test.sh
 
