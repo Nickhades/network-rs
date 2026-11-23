@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+*.core
+/build-test.log
+/build/
+/artifacts/desktop-test/logs/
+/artifacts/desktop-test/run/
+__pycache__/
+*.pyc

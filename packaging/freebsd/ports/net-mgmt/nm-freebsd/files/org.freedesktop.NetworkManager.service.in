@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.freedesktop.NetworkManager
+Exec=%%PREFIX%%/bin/nm-freebsd-daemon
+User=root

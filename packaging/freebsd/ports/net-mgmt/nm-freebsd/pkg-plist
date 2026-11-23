@@ -1,0 +1,6 @@
+bin/nm-freebsd-daemon
+etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf
+share/dbus-1/system-services/org.freedesktop.NetworkManager.service
+etc/rc.d/nm_freebsd
+%%XFCE%%lib/xfce4/panel/plugins/libnm_freebsd_xfce.so
+%%XFCE%%share/xfce4/panel/plugins/nm_freebsd_xfce.desktop

@@ -1,0 +1,11 @@
+nm-freebsd is a NetworkManager D-Bus compatibility service for FreeBSD.
+
+It owns org.freedesktop.NetworkManager on the system bus and exposes the
+subset of the NetworkManager API used by plasma-nm, the GNOME network panel
+and an included XFCE panel plugin. Wi-Fi operations are carried out through
+wpa_supplicant, using its D-Bus interface when available and its native
+control socket otherwise. Wired links and interface events are observed
+through FreeBSD netlink.
+
+The daemon does not start any desktop UI: KDE and GNOME use their native
+frontends, while XFCE users can add the NetworkManager FreeBSD panel plugin.

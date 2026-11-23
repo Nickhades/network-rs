@@ -1,0 +1,19 @@
+===========================================================================
+nm-freebsd has been installed.
+
+Enable the daemon at boot:
+
+    sysrc nm_freebsd_enable=YES
+
+Start it now:
+
+    service dbus restart
+    service nm_freebsd start
+
+KDE and GNOME need no extra UI. XFCE users can add "NetworkManager FreeBSD"
+from the panel's "Add New Items" dialog after restarting xfce4-panel.
+
+The D-Bus policy installed in %%PREFIX%%/etc/dbus-1/system.d allows all local
+users to call the service (there is no polkit integration in this MVP).
+Tighten that file if the machine has untrusted local users.
+===========================================================================

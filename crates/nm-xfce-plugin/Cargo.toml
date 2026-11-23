@@ -1,0 +1,22 @@
+[package]
+name = "nm-xfce-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "XFCE panel plugin for the NetworkManager FreeBSD compatibility daemon"
+build = "build.rs"
+
+[lib]
+name = "nm_freebsd_xfce"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+nm-common.workspace = true
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+xfce-panel = "0.1"
+zbus.workspace = true
+
+[build-dependencies]
+xfce-panel = { version = "0.1", features = ["build"] }
