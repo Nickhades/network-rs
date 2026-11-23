@@ -35,6 +35,8 @@ enum Command {
     Devices,
     /// List saved connection profiles.
     Connections,
+    /// Diagnose interfaces, visible bands and driver capabilities.
+    Doctor,
     /// Wi-Fi operations.
     Wifi {
         #[command(subcommand)]
@@ -139,6 +141,8 @@ trait AccessPoint {
     fn wpa_flags(&self) -> zbus::Result<u32>;
     #[zbus(property)]
     fn rsn_flags(&self) -> zbus::Result<u32>;
+    #[zbus(property)]
+    fn frequency(&self) -> zbus::Result<u32>;
 }
 
 #[zbus::proxy(
@@ -164,6 +168,7 @@ async fn main() -> Result<()> {
         Command::Status => status(&conn, &manager).await?,
         Command::Devices => devices(&conn, &manager).await?,
         Command::Connections => connections(&conn).await?,
+        Command::Doctor => doctor(&conn, &manager).await?,
         Command::Wifi { command } => match command {
             WifiCommand::List { scan } => wifi_list(&conn, &manager, scan).await?,
             WifiCommand::Connect { ssid, password } => {
@@ -249,6 +254,146 @@ async fn connections(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn supported_channels(ifname: &str) -> Vec<u32> {
+    let output = std::process::Command::new("ifconfig")
+        .args([ifname, "list", "chan"])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let mut frequencies = Vec::new();
+    for window in tokens.windows(2) {
+        if window[1] == "MHz"
+            && let Ok(frequency) = window[0].trim_end_matches('*').parse::<u32>()
+        {
+            frequencies.push(frequency);
+        }
+    }
+    frequencies.sort_unstable();
+    frequencies.dedup();
+    frequencies
+}
+
+fn sysctl_value(name: &str) -> Option<String> {
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn channel_summary(frequencies: &[u32]) -> String {
+    if frequencies.is_empty() {
+        return "none".to_string();
+    }
+    frequencies
+        .iter()
+        .map(|frequency| frequency.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+async fn doctor(conn: &Connection, manager: &ManagerProxy<'_>) -> Result<()> {
+    println!("== daemon ==");
+    println!("version: {}", manager.version().await?);
+    let state = manager.state().await?;
+    println!("state:   {state} ({})", manager_state(state));
+    println!(
+        "active:  {} connection(s)",
+        manager.active_connections().await?.len()
+    );
+
+    println!("== interfaces ==");
+    devices(conn, manager).await?;
+
+    println!("== wi-fi ==");
+    let Ok((_path, device, wireless)) = wifi_device(conn, manager).await else {
+        println!("no Wi-Fi device");
+        return Ok(());
+    };
+    let ifname = device.interface().await.unwrap_or_default();
+    let aps = access_points(conn, &wireless).await?;
+    let mut bands: HashMap<String, usize> = HashMap::new();
+    let mut bssids = 0;
+    let mut active = None;
+    for ap in &aps {
+        *bands.entry(band_label(ap.frequency)).or_default() += 1;
+        bssids += ap.bssids;
+        if ap.active {
+            active = Some(ap);
+        }
+    }
+    println!("interface: {ifname}");
+    println!("visible:   {} SSID(s), {bssids} BSSID(s)", aps.len());
+    for band in ["2.4G", "5G", "6G"] {
+        println!(
+            "  {band:4} {} SSID(s)",
+            bands.get(band).copied().unwrap_or(0)
+        );
+    }
+    match active {
+        Some(ap) => println!(
+            "active:    {} ({}, {}%)",
+            ap.ssid,
+            band_label(ap.frequency),
+            ap.strength
+        ),
+        None => println!("active:    none"),
+    }
+
+    let channels = supported_channels(&ifname);
+    let ch24: Vec<u32> = channels
+        .iter()
+        .copied()
+        .filter(|f| (2400..=2500).contains(f))
+        .collect();
+    let ch5: Vec<u32> = channels
+        .iter()
+        .copied()
+        .filter(|f| (4900..=5925).contains(f))
+        .collect();
+    let ch6: Vec<u32> = channels
+        .iter()
+        .copied()
+        .filter(|f| (5925..=7125).contains(f))
+        .collect();
+    println!("supported channels:");
+    println!("  2.4G: {}", channel_summary(&ch24));
+    println!("  5G:   {}", channel_summary(&ch5));
+    println!("  6G:   {}", channel_summary(&ch6));
+
+    let mut warnings = Vec::new();
+    if ch5.is_empty() {
+        warnings.push("driver/regulatory exposes no 5GHz channels");
+    } else if bands.get("5G").copied().unwrap_or(0) == 0 {
+        warnings.push("5GHz channels exist but no 5GHz BSS is visible (channel/range/hidden AP)");
+    }
+    if bands.get("6G").copied().unwrap_or(0) == 0 && ch6.is_empty() {
+        warnings.push("no 6GHz channels or BSS visible");
+    }
+    let ht = sysctl_value("compat.linuxkpi.rtw89_support_ht");
+    let vht = sysctl_value("compat.linuxkpi.rtw89_support_vht");
+    if ht.as_deref() == Some("0") || vht.as_deref() == Some("0") {
+        warnings.push("rtw89 HT/VHT are disabled; 5GHz support is experimental");
+    }
+    if !warnings.is_empty() {
+        println!("warnings:");
+        for warning in warnings {
+            println!("  - {warning}");
+        }
+    }
+    println!("hint: run nm-freebsd-cli wifi list --scan for a fresh scan");
+    Ok(())
+}
+
 async fn wifi_device(
     conn: &Connection,
     manager: &ManagerProxy<'_>,
@@ -277,10 +422,20 @@ async fn wifi_device(
 struct ApInfo {
     path: OwnedObjectPath,
     ssid: String,
+    frequency: u32,
     strength: u8,
     secure: bool,
     active: bool,
     bssids: usize,
+}
+
+fn band_label(frequency: u32) -> String {
+    match frequency {
+        2400..=2500 => "2.4G".to_string(),
+        4900..=5924 => "5G".to_string(),
+        5925..=7125 => "6G".to_string(),
+        _ => format!("{frequency}MHz"),
+    }
 }
 
 async fn access_points(conn: &Connection, wireless: &WirelessProxy<'_>) -> Result<Vec<ApInfo>> {
@@ -296,6 +451,7 @@ async fn access_points(conn: &Connection, wireless: &WirelessProxy<'_>) -> Resul
         let wpa = ap.wpa_flags().await.unwrap_or(0);
         let rsn = ap.rsn_flags().await.unwrap_or(0);
         let strength = ap.strength().await.unwrap_or(0);
+        let frequency = ap.frequency().await.unwrap_or(0);
         let secure = (flags & 1) != 0 || wpa != 0 || rsn != 0;
         let is_active = active.as_ref().map(|p| p == &path).unwrap_or(false);
 
@@ -304,11 +460,13 @@ async fn access_points(conn: &Connection, wireless: &WirelessProxy<'_>) -> Resul
                 existing.bssids += 1;
                 if is_active {
                     existing.path = path;
+                    existing.frequency = frequency;
                     existing.strength = strength;
                     existing.secure = secure;
                     existing.active = true;
                 } else if !existing.active && strength > existing.strength {
                     existing.path = path;
+                    existing.frequency = frequency;
                     existing.strength = strength;
                     existing.secure = secure;
                 }
@@ -319,6 +477,7 @@ async fn access_points(conn: &Connection, wireless: &WirelessProxy<'_>) -> Resul
                     ApInfo {
                         path,
                         ssid,
+                        frequency,
                         strength,
                         secure,
                         active: is_active,
@@ -343,8 +502,13 @@ async fn wifi_list(conn: &Connection, manager: &ManagerProxy<'_>, scan: bool) ->
         let lock = if ap.secure { "locked" } else { "open" };
         let active = if ap.active { "  [active]" } else { "" };
         println!(
-            "{:32} {:3}%  {:6}  {} BSSID(s){}",
-            ap.ssid, ap.strength, lock, ap.bssids, active
+            "{:32} {:5} {:3}%  {:6}  {} BSSID(s){}",
+            ap.ssid,
+            band_label(ap.frequency),
+            ap.strength,
+            lock,
+            ap.bssids,
+            active
         );
     }
     Ok(())

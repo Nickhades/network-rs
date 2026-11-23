@@ -13,6 +13,7 @@ changes, update both.
 | D-Bus surface | [DBUS.md](DBUS.md) | [DBUS.md](zh-CN/DBUS.md) |
 | Wi-Fi scan flow | [SCAN-FLOW.md](SCAN-FLOW.md) | [SCAN-FLOW.md](zh-CN/SCAN-FLOW.md) |
 | FreeBSD notes | [FREEBSD-NOTES.md](FREEBSD-NOTES.md) | [FREEBSD-NOTES.md](zh-CN/FREEBSD-NOTES.md) |
+| Hardware/bands | [HARDWARE.md](HARDWARE.md) | [HARDWARE.md](zh-CN/HARDWARE.md) |
 | Testing | [TESTING.md](TESTING.md) | [TESTING.md](zh-CN/TESTING.md) |
 | Code review | [CODE-REVIEW.md](CODE-REVIEW.md) | [CODE-REVIEW.md](zh-CN/CODE-REVIEW.md) |
 | FreeBSD packaging | [packaging/freebsd/README.md](../packaging/freebsd/README.md) | [README.zh-CN.md](../packaging/freebsd/README.zh-CN.md) |

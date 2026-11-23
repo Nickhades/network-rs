@@ -62,8 +62,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
   serialization/profile dedupe, and GNOME/XFCE frontend fixes; historical.
 - **v0.2.3** — thin `nm-freebsd-cli` over the same NM D-Bus contract;
   historical.
-- **v0.2.4 / main** — aggregate multiple BSSIDs per SSID in the CLI and
-  GNOME extension; daemon keeps the standard one-AP-per-BSSID contract.
+- **v0.2.4** — aggregate multiple BSSIDs per SSID in the CLI and GNOME
+  extension; daemon keeps the standard one-AP-per-BSSID contract; historical.
+- **v0.2.5 / main** — per-SSID band display, `nm-freebsd-cli doctor`, and a
+  documented hardware/band support matrix.
 
 ## Status
 
@@ -120,7 +122,8 @@ See [docs/DBUS.md](docs/DBUS.md) for signatures and frontend notes,
 [docs/SCAN-FLOW.md](docs/SCAN-FLOW.md) for the exact RequestScan ->
 Interface.Scan -> ScanDone -> BSSs chain, and
 [docs/CODE-REVIEW.md](docs/CODE-REVIEW.md) for the review findings and accepted
-risks. A bilingual documentation index is at [docs/README.md](docs/README.md).
+risks, and [docs/HARDWARE.md](docs/HARDWARE.md) for the interface/band support
+matrix. A bilingual documentation index is at [docs/README.md](docs/README.md).
 
 ## Important FreeBSD findings
 
@@ -262,6 +265,7 @@ nm-freebsd-cli status
 nm-freebsd-cli devices
 nm-freebsd-cli connections
 nm-freebsd-cli wifi list --scan
+nm-freebsd-cli doctor
 nm-freebsd-cli wifi connect "Cafe WiFi" --password 'secret'
 nm-freebsd-cli disconnect
 ```
@@ -475,7 +479,7 @@ scripts/                   install, deps, build-test, smoke-test, desktop-test
 packaging/freebsd/         policy, activation service, rc.d, port skeleton
 tools/                     fake wpa server, port crate-list generator
 artifacts/desktop-test/    panel/menu screenshots and logs
-docs/                      English architecture, D-Bus, scan flow, FreeBSD, testing, review
+docs/                      English architecture, D-Bus, scan flow, FreeBSD, hardware, testing, review
 docs/zh-CN/                Chinese mirrors of the same documents
 crates/nm-freebsd-cli/     thin NM D-Bus CLI
 gnome-extension/           raw D-Bus GNOME Shell extension

@@ -11,6 +11,7 @@
 | D-Bus 接口 | [DBUS.md](../DBUS.md) | [DBUS.md](DBUS.md) |
 | Wi-Fi 扫描链路 | [SCAN-FLOW.md](../SCAN-FLOW.md) | [SCAN-FLOW.md](SCAN-FLOW.md) |
 | FreeBSD 实现备注 | [FREEBSD-NOTES.md](../FREEBSD-NOTES.md) | [FREEBSD-NOTES.md](FREEBSD-NOTES.md) |
+| 硬件/频段支持 | [HARDWARE.md](../HARDWARE.md) | [HARDWARE.md](HARDWARE.md) |
 | 测试 | [TESTING.md](../TESTING.md) | [TESTING.md](TESTING.md) |
 | 代码审核 | [CODE-REVIEW.md](../CODE-REVIEW.md) | [CODE-REVIEW.md](CODE-REVIEW.md) |
 | FreeBSD 打包 | [packaging/freebsd/README.md](../../packaging/freebsd/README.md) | [README.zh-CN.md](../../packaging/freebsd/README.zh-CN.md) |

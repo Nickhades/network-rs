@@ -46,8 +46,10 @@
   去重，以及 GNOME/XFCE 前端修复；历史存档。
 - **v0.2.3** — 同一 NM D-Bus 契约上的瘦客户端
   <code>nm-freebsd-cli</code>；历史存档。
-- **v0.2.4 / main** — CLI 和 GNOME 扩展按 SSID 聚合多个 BSSID；
-  daemon 仍保持标准的一 BSSID 一 AccessPoint 契约。
+- **v0.2.4** — CLI 和 GNOME 扩展按 SSID 聚合多个 BSSID；
+  daemon 仍保持标准的一 BSSID 一 AccessPoint 契约；历史存档。
+- **v0.2.5 / main** — 按 SSID 显示频段、<code>nm-freebsd-cli doctor</code>
+  诊断，以及硬件/频段支持矩阵。
 
 ## 当前状态
 
@@ -91,7 +93,7 @@
 | 安全 | <code>wheel</code>/<code>network</code> D-Bus 策略、按 caller uid 检查、真实 GetPermissions、独立 0600 keyring |
 | 打包 | D-Bus policy、activation service、rc.d 脚本、Port skeleton |
 
-接口签名和前端调用说明见 [docs/zh-CN/DBUS.md](docs/zh-CN/DBUS.md)；扫描链路见 [docs/zh-CN/SCAN-FLOW.md](docs/zh-CN/SCAN-FLOW.md)；代码审核见 [docs/zh-CN/CODE-REVIEW.md](docs/zh-CN/CODE-REVIEW.md)。双语文档索引见 [docs/zh-CN/README.md](docs/zh-CN/README.md)。
+接口签名和前端调用说明见 [docs/zh-CN/DBUS.md](docs/zh-CN/DBUS.md)；扫描链路见 [docs/zh-CN/SCAN-FLOW.md](docs/zh-CN/SCAN-FLOW.md)；代码审核见 [docs/zh-CN/CODE-REVIEW.md](docs/zh-CN/CODE-REVIEW.md)；硬件/频段支持见 [docs/zh-CN/HARDWARE.md](docs/zh-CN/HARDWARE.md)。双语文档索引见 [docs/zh-CN/README.md](docs/zh-CN/README.md)。
 
 ## FreeBSD 上的关键发现
 
@@ -212,6 +214,7 @@ XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
     nm-freebsd-cli devices
     nm-freebsd-cli connections
     nm-freebsd-cli wifi list --scan
+    nm-freebsd-cli doctor
     nm-freebsd-cli wifi connect "云涧" --password '...'
     nm-freebsd-cli disconnect
 
@@ -395,7 +398,7 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
     packaging/freebsd/         policy、activation service、rc.d、Port skeleton
     tools/                     假 wpa 服务、Port crate 列表生成器
     artifacts/desktop-test/    面板/菜单截图
-    docs/                      英文规范文档
+    docs/                      英文规范文档（含硬件/频段矩阵）
     docs/zh-CN/                中文镜像文档
     install-oneclick.sh        预编译 root 安装器（无需 Rust 构建）
     uninstall-oneclick.sh      卸载入口
