@@ -77,12 +77,13 @@ this repository. This is a working review, not a formal security audit.
   one).
 - Live plasma-nm and GNOME panel compatibility is still untested; XFCE was
   tested in an isolated real panel.
-- Phase 1 restricts full D-Bus access to `wheel`/`network` and checks the
-  caller uid in the daemon; other local users are read-only. There is still no
-  polkit/SecretAgent. The keyring is a separate 0600 file but is not encrypted at
-  rest, so root (and anyone who can read root files) can recover PSKs.
-- A non-`wheel`/`network` desktop user gets a read-only UI until added to one of
-  those groups. This is deliberate, not a bug.
+- Full D-Bus control is restricted to `wheel`/`network`; profile owners can
+  activate/deactivate their own profiles and read their own secrets. Settings
+  writes still require an admin group. There is still no polkit/SecretAgent.
+  The keyring is a separate 0600 file but is not encrypted at rest, so root (and
+  anyone who can read root files) can recover PSKs.
+- A non-`wheel`/`network` desktop user can manage own profiles but cannot edit
+  system settings until added to one of those groups.
 - The installed FreeBSD GNOME Control Center has no network panel and no
   `libnm` linkage; `networkmanager-shim` is a build stub. The D-Bus service
   cannot make a frontend compiled without NM support appear. Phase 4 needs a

@@ -6,10 +6,12 @@
 
 > ### 安全警告：目前不要直接安装在多用户系统上
 >
-> 这个 MVP 没有 polkit，也没有 SecretAgent。完整控制权限只授予 root 和
-> <code>wheel</code>、<code>network</code> 组成员，其他本地用户只有只读权限。
-> 桌面用户必须属于其中之一：<code>pw groupmod network -m &lt;user&gt;</code>，
-> 然后注销并重新登录。守护进程以 root 运行，可以修改整台机器的 Wi-Fi 配置。
+> 这个 MVP 没有 polkit，也没有 SecretAgent。root 和
+> <code>wheel</code>/<code>network</code> 组成员拥有完整控制权；profile owner
+> 可以激活/断开自己的 profile 并读取自己的密钥，其他本地用户只读。
+> settings 写入和整机 enable/sleep 仍需要管理员组：
+> <code>pw groupmod network -m &lt;user&gt;</code>，然后注销并重新登录。
+> 守护进程以 root 运行，可以修改整台机器的 Wi-Fi 配置。
 > 保存的 Wi-Fi 密码放在 <code>/var/db/nm-freebsd/keyring.json</code>（权限 0600），
 > 与 profile 分离，但**没有静态加密**：root 可以读取。
 > 在 polkit/SecretAgent 完成前，不要在共享、多用户或存在不可信本地用户的机器上安装。
@@ -38,26 +40,11 @@
 
 ## 版本历史
 
-- **v0.1.0** — 初始 NetworkManager 兼容 MVP；作为历史存档标签保留。
-- **v0.2.0** — Phase 1 安全加固与 Phase 2 DHCP；历史存档。
-- **v0.2.1** — Phase 3 信号回归与信号驱动 XFCE 面板；历史存档。
-- **v0.2.2** — NM 契约修复（Device.Disconnect、
-  AddAndActivateConnection2）、ActiveConnection 接管、激活串行化/profile
-  去重，以及 GNOME/XFCE 前端修复；历史存档。
-- **v0.2.3** — 同一 NM D-Bus 契约上的瘦客户端
-  <code>nm-freebsd-cli</code>；历史存档。
-- **v0.2.4** — CLI 和 GNOME 扩展按 SSID 聚合多个 BSSID；
-  daemon 仍保持标准的一 BSSID 一 AccessPoint 契约；历史存档。
-- **v0.2.5** — 按 SSID 显示频段、<code>nm-freebsd-cli doctor</code>
-  诊断，以及硬件/频段支持矩阵；历史存档。
-- **v0.2.6** — 隐藏 SSID profile 支持
-  （<code>802-11-wireless.hidden</code>）和
-  <code>nm-freebsd-cli wifi connect --hidden</code>；历史存档。
-- **v0.2.7** — profile owner-uid 持久化，以及 owner/admin 的
-  <code>GetSecrets</code> 授权；历史存档。
-- **v0.2.8 / main** — 检测已在管理该接口的外部
-  <code>dhcpcd</code>/<code>dhclient</code>，不再启动第二个 DHCP 客户端，
-  避免双租约。
+- **v0.2.9 / main** — owner/admin 激活与断开、owner 范围的
+  <code>GetSecrets</code>、隐藏 SSID、频段/doctor 诊断，以及 DHCP 客户端冲突检测。
+  本文档描述当前代码。
+- 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
+  历史说明见 GitHub releases。
 
 ## 当前状态
 
@@ -355,21 +342,27 @@ D-Bus settings 字典由这些字段重建，密钥不会写入日志。
 
 ## 安全
 
-安装的 D-Bus 策略只向 root 和 <code>wheel</code>/<code>network</code> 组成员授予
-**完整方法访问权**；守护进程还会对每个修改类方法（激活、settings 写入、读取密钥、
-enable/sleep）独立检查 caller uid；非特权的 <code>Properties.Set</code> 由策略阻止。非特权本地用户只能读取 Manager/Device/AP 属性、
-列出不含密钥的已保存连接并发起扫描。策略和守护进程都会拒绝其
-<code>Properties.Set</code> 与 <code>GetSecrets</code>。
-<code>GetPermissions</code> 会解析 caller uid 并如实返回 <code>yes</code>/<code>no</code>
-（扫描对所有人开放，控制操作不开放）。
+root 和 <code>wheel</code>/<code>network</code> 组成员拥有完整方法访问权；
+守护进程还会对每个操作独立检查 caller uid。非管理员用户可以：
 
-目前仍然没有 polkit 和 SecretAgent。不属于 <code>wheel</code> 或 <code>network</code>
-的桌面用户会得到只读界面；授权方式：
+- 激活 <code>owner_uid</code> 等于自己的 profile；
+- 断开自己拥有的活动连接；
+- 对自己拥有的活动连接调用 <code>Device.Disconnect()</code>；
+- 读取自己 profile 的 <code>GetSecrets()</code>；
+- 调用 <code>AddAndActivateConnection[2]</code>，创建归自己所有的 profile 并激活；
+- 读取 Manager/Device/AP 属性、列出不含密钥的 settings、发起扫描。
+
+settings 写入（<code>AddConnection</code>、<code>Update</code>、<code>Delete</code>）、
+<code>Enable</code>、<code>Sleep</code> 和整机操作仍要求
+<code>wheel</code>/<code>network</code>。没有 <code>owner_uid</code> 的旧 profile
+仍仅限管理员。D-Bus 策略允许 owner 路径进入 daemon，由 daemon 做 owner/admin 判定。
+
+目前仍然没有 polkit 和 SecretAgent。<code>GetPermissions</code> 只回答整机控制权限，
+不表达 per-profile ownership。管理员可以授予完整控制权：
 
     pw groupmod network -m <user>
 
-然后注销并重新登录。多用户或存在不可信本地用户的系统，请先不要安装本 MVP，
-等待 polkit/SecretAgent 阶段。keyring 是独立的 0600 文件，但**没有静态加密**，
+然后注销并重新登录。keyring 是独立的 0600 文件，但**没有静态加密**，
 root 可以读取。不要把系统总线暴露给不可信机器。应把
 <code>/var/db/nm-freebsd</code> 视为敏感目录。
 
@@ -382,7 +375,8 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
   BOUND/RENEW/REBIND/EXPIRE。租约超时（默认 30 秒）后设备保持 IP_CONFIG，
   Manager 降级到 CONNECTED_SITE，而不是谎报可用 IP。
 - 不支持 IPv6（<code>IP6Config</code> 为 <code>/</code>）、DHCPv6、DHCP option 对象、SecretAgent、
-  polkit、VPN、企业级 802.1X、WEP、隐藏网络 UI。
+  polkit、VPN、企业级 802.1X、WEP。隐藏 SSID 已支持 CLI/profile，但 XFCE/GNOME
+  面板还没有隐藏网络输入 UI。
 - 不自动激活已保存配置。wpa_supplicant 自己配置的网络仍可能关联，守护进程会报告该状态。
 - 守护进程启动前已经连上的 Wi-Fi 会在启动时被接管为
   <code>ActiveConnection</code>，并绑定匹配的 profile 和现有 IPv4 配置；

@@ -74,15 +74,16 @@ Installed paths on FreeBSD:
 /usr/local/etc/rc.d/nm_freebsd
 ```
 
-The policy gives root and the `wheel` and `network` groups full method access;
-other local users get read-only Manager/Device/AP calls and settings metadata
-(no secrets). The daemon also checks the caller uid for every mutating method,
-so a policy mistake does not silently grant write access. The service file lets
-the bus start the daemon on demand as root. The rc.d script uses
+The policy gives root and the `wheel` and `network` groups full method access.
+Profile owners may call the explicit activation/disconnect/GetSecrets methods;
+the daemon makes the owner/admin decision. Other local users get read-only
+Manager/Device/AP calls and settings metadata (no secrets). The service file
+lets the bus start the daemon on demand as root. The rc.d script uses
 `/usr/sbin/daemon -p` to background the daemon and writes
 `/var/run/nm_freebsd.pid`.
 
-The desktop user must be in `wheel` or `network` for a writable UI:
+The desktop user must be in `wheel` or `network` for system settings; own
+profiles work without that group:
 
     pw groupmod network -m <user>
 

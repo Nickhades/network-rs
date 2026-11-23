@@ -6,11 +6,12 @@ Repository: <https://github.com/Nickhades/network-rs>
 
 > ### Security warning: do not install this on a multi-user system yet
 >
-> This MVP has no polkit and no SecretAgent. Full control is granted only to
-> root and members of the `wheel` and `network` groups; other local users get
-> read-only access. The desktop user must be in one of those groups:
-> `pw groupmod network -m <user>` (then log out and back in).
-> The daemon runs as root and can change machine-wide Wi-Fi settings.
+> This MVP has no polkit and no SecretAgent. Root and members of
+> `wheel`/`network` have full control. A profile owner can activate and
+> deactivate that profile and read its secrets; other local users are
+> read-only. Settings writes and machine-wide enable/sleep still require an
+> administrator group: `pw groupmod network -m <user>` (then log out and back
+> in). The daemon runs as root and can change machine-wide Wi-Fi settings.
 > Saved Wi-Fi passphrases live in `/var/db/nm-freebsd/keyring.json` (mode 0600)
 > separately from profiles, but they are **not encrypted at rest**: root can
 > read them. Do not install this on a shared, multi-user or hostile-local-user
@@ -52,27 +53,11 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.1.0** — initial NetworkManager compatibility MVP; kept as a historical
-  archive tag.
-- **v0.2.0** — Phase 1 security hardening and Phase 2 DHCP; historical.
-- **v0.2.1** — Phase 3 signal regression plus signal-driven XFCE panel;
-  historical.
-- **v0.2.2** — NM contract fixes (Device.Disconnect,
-  AddAndActivateConnection2), ActiveConnection adoption, activation
-  serialization/profile dedupe, and GNOME/XFCE frontend fixes; historical.
-- **v0.2.3** — thin `nm-freebsd-cli` over the same NM D-Bus contract;
-  historical.
-- **v0.2.4** — aggregate multiple BSSIDs per SSID in the CLI and GNOME
-  extension; daemon keeps the standard one-AP-per-BSSID contract; historical.
-- **v0.2.5** — per-SSID band display, `nm-freebsd-cli doctor`, and a
-  documented hardware/band support matrix; historical.
-- **v0.2.6** — hidden SSID profile support
-  (`802-11-wireless.hidden`) and `nm-freebsd-cli wifi connect --hidden`;
-  historical.
-- **v0.2.7** — profile owner-uid persistence and owner/admin
-  `GetSecrets` authorization; historical.
-- **v0.2.8 / main** — detect an external `dhcpcd`/`dhclient` already managing
-  the interface and do not start a second DHCP client (prevents double leases).
+- **v0.2.9 / main** — owner/admin activation and disconnection,
+  owner-scoped `GetSecrets`, hidden SSID profiles, band display/doctor, and
+  DHCP-client conflict detection. This document describes the current tree.
+- Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
+  GitHub releases page for their historical notes.
 
 ## Status
 
@@ -428,26 +413,32 @@ reconstructed from those fields. Secrets are never logged.
 
 ## Security
 
-The installed policy grants **full method access only to root and members of
-`wheel`/`network`**, and the daemon independently checks the caller uid for
-every mutating method it implements (activation, settings writes, secrets,
-enable/sleep); unprivileged `Properties.Set` is blocked by the policy.
-Unprivileged local users can read manager/device/AP properties, list saved
-connections without secrets, and request scans. `Properties.Set` and
-`GetSecrets` are denied to them by policy and daemon checks.
-`GetPermissions` resolves the caller uid and returns `yes`/`no` truthfully
-(scan is allowed for everyone; control operations are not).
+Root and members of `wheel`/`network` have full method access. The daemon
+also checks the caller uid for every implemented operation. A non-admin caller
+may:
 
-There is still no polkit and no SecretAgent. A desktop user who is not in
-`wheel` or `network` gets a read-only UI; grant control with:
+- activate a profile whose `owner_uid` matches the caller;
+- deactivate an active connection owned by the caller;
+- call `Device.Disconnect()` for an active connection owned by the caller;
+- call `GetSecrets()` for a profile owned by the caller;
+- call `AddAndActivateConnection[2]`, which creates a profile owned by the
+  caller and then activates it;
+- read manager/device/AP properties, list settings without secrets, and scan.
+
+Settings writes (`AddConnection`, `Update`, `Delete`), `Enable`, `Sleep`,
+and machine-wide operations still require `wheel`/`network`. A legacy profile
+with no `owner_uid` is administrator-only. The D-Bus policy allows the
+owner-routed calls through; the daemon performs the owner/admin decision.
+
+There is still no polkit and no SecretAgent. `GetPermissions` is coarse: it
+answers for machine-wide control, not for per-profile ownership. Administrators
+can delegate full control with:
 
     pw groupmod network -m <user>
 
-then log out and back in. For multi-user or hostile-local-user systems, do not
-install this MVP yet; wait for the polkit/SecretAgent phase. The keyring is a
-separate 0600 file, but it is **not encrypted at rest** and root can read it.
-Do not expose the system bus to untrusted machines. Treat
-`/var/db/nm-freebsd` as secret.
+then log out and back in. The keyring is a separate 0600 file, but it is **not
+encrypted at rest** and root can read it. Do not expose the system bus to
+untrusted machines. Treat `/var/db/nm-freebsd` as secret.
 
 ## Limitations and roadmap
 

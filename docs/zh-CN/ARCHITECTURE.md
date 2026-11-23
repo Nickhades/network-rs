@@ -101,8 +101,8 @@ dispatcher 已经持有该接口的读锁，而处理函数又等待同一个对
    profile JSON 分离。旧 profile 中的明文 <code>psk</code> 在加载时迁移。
    keyring 没有静态加密，root 可以读取；这是隔离/最小暴露措施，不是密钥保险库。
 
-目前仍没有 polkit 或 SecretAgent。不属于管理员组的桌面用户会得到只读界面；
-README 警告说明了如何通过 <code>network</code> 组授权。
+目前仍没有 polkit 或 SecretAgent。不属于管理员组的桌面用户可以管理自己的
+profile，但不能修改系统设置；README 说明了如何通过 <code>network</code> 组授权。
 
 ## DHCP 与 IP 配置
 

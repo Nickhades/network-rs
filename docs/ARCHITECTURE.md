@@ -112,22 +112,24 @@ wpa_supplicant D-Bus option.
 Access control has three layers:
 
 1. The installed D-Bus policy grants full send access to root and members of
-   `wheel`/`network`, and only explicit read-only method calls to other local
-   users (`Properties.Get/GetAll`, Manager queries, AP discovery/scan,
-   Settings metadata without secrets).
+   `wheel`/`network`. Other local users may call explicit read-only methods
+   plus the owner-routed activation methods; the daemon makes the final
+   owner/admin decision.
 2. `auth.rs` resolves the caller's Unix uid through
-   `org.freedesktop.DBus.GetConnectionUnixUser` and checks root or membership
-   in those groups. Every mutating method implemented by the daemon calls
-   `require_admin`; `GetPermissions` returns the same decision to frontends.
-   `GetSecrets` allows the profile owner or an administrator.
+   `org.freedesktop.DBus.GetConnectionUnixUser`. `ActivateConnection`,
+   `DeactivateConnection`, `Device.Disconnect` and `GetSecrets` allow the
+   profile owner or an administrator. `AddAndActivateConnection[2]` creates a
+   profile owned by the caller. Settings writes, `Enable` and `Sleep` still
+   call `require_admin`. `GetPermissions` is intentionally coarse and reports
+   machine-wide control, not per-profile ownership.
 3. Saved PSKs live in `/var/db/nm-freebsd/keyring.json` (0600), separate from
    the 0600 profile JSON. Legacy plaintext `psk` fields are migrated on load.
    The keyring is not encrypted at rest; root can read it, so this is a
    separation/least-exposure measure, not a secret vault.
 
-There is no polkit or SecretAgent yet. A desktop user outside the admin groups
-gets a read-only UI; the README warning tells the user how to delegate through
-`network`.
+There is no polkit or SecretAgent yet. A desktop user outside the admin
+groups can manage their own profiles but cannot modify system settings; the
+README explains how to delegate full control through `network`.
 
 ## DHCP and IP configuration
 

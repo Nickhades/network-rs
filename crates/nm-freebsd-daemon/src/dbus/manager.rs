@@ -148,7 +148,8 @@ impl ManagerIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
-        auth::require_admin(bus, header, "ActivateConnection").await?;
+        let owner_uid = self.core.connection_owner_uid(&connection).await;
+        auth::require_activation_access(bus, header, owner_uid, "ActivateConnection").await?;
         self.core
             .activate(&connection, &device, &specific_object)
             .await
@@ -163,9 +164,16 @@ impl ManagerIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<(OwnedObjectPath, OwnedObjectPath)> {
-        let owner_uid = auth::require_admin_uid(bus, header, "AddAndActivateConnection").await?;
+        let owner_uid = auth::caller_uid(bus, header).await?;
+        let admin = auth::is_admin_uid(owner_uid);
         self.core
-            .add_and_activate(&connection, &device, &specific_object, Some(owner_uid))
+            .add_and_activate(
+                &connection,
+                &device,
+                &specific_object,
+                Some(owner_uid),
+                admin,
+            )
             .await
             .map_err(Into::into)
     }
@@ -183,10 +191,17 @@ impl ManagerIface {
         OwnedObjectPath,
         HashMap<String, OwnedVariant>,
     )> {
-        let owner_uid = auth::require_admin_uid(bus, header, "AddAndActivateConnection2").await?;
+        let owner_uid = auth::caller_uid(bus, header).await?;
+        let admin = auth::is_admin_uid(owner_uid);
         let (connection_path, active_path) = self
             .core
-            .add_and_activate(&connection, &device, &specific_object, Some(owner_uid))
+            .add_and_activate(
+                &connection,
+                &device,
+                &specific_object,
+                Some(owner_uid),
+                admin,
+            )
             .await?;
         // The FreeBSD backend keeps profiles in its own state directory and
         // cannot promise an on-disk NetworkManager keyfile for every caller.
@@ -202,7 +217,8 @@ impl ManagerIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
-        auth::require_admin(bus, header, "DeactivateConnection").await?;
+        let owner_uid = self.core.active_owner_uid(&active_connection).await;
+        auth::require_activation_access(bus, header, owner_uid, "DeactivateConnection").await?;
         self.core
             .deactivate(&active_connection)
             .await

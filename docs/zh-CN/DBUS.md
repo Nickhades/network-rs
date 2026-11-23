@@ -212,8 +212,9 @@ plasma-nm/GNOME 的一次扫描/连接通常映射为：
 <code>wheel</code> 或 <code>network</code> 组成员对控制操作得到 <code>yes</code>，
 其他本地用户得到 <code>no</code>（扫描仍为 <code>yes</code>）。
 未实现的功能（WWAN、Wi-Fi 共享、按用户配置）即使是管理员也返回 <code>no</code>，
-避免前端显示无法工作的控件。D-Bus 策略向相同组授予完整访问权，
-非特权用户只能执行只读调用。
+避免前端显示无法工作的控件。D-Bus 策略向管理员组授予完整访问权；
+非特权用户可调用 owner 路径的激活/断开/GetSecrets，以及只读方法，
+最终判定由 daemon 的 owner/admin 检查完成。
 
 本 MVP 没有实现 <code>org.freedesktop.NetworkManager.SecretAgent</code> 或
 <code>AgentManager</code>；请把 PSK 放在 settings 字典里（XFCE 插件就是这样做的）。

@@ -212,8 +212,9 @@ A typical plasma-nm/GNOME scan/connect sequence maps to:
 of `wheel` or `network` get `yes` for control operations; other local users get
 `no` (scan remains `yes`). Unsupported features (WWAN, Wi-Fi sharing, per-user
 settings) report `no` even for administrators, so a frontend does not show dead
-controls. The D-Bus policy grants the same groups full access and gives
-unprivileged users read-only calls.
+controls. The D-Bus policy grants the same groups full access; profile owners
+may use the explicit activation/disconnect/GetSecrets methods, and the daemon
+makes the owner/admin decision.
 
 There is no `org.freedesktop.NetworkManager.SecretAgent` or `AgentManager`
 implementation; send the PSK in the settings dictionary (as the XFCE plugin

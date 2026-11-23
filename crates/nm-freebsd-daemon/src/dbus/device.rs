@@ -210,7 +210,8 @@ impl DeviceIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
-        auth::require_admin(bus, header, "Device.Disconnect").await?;
+        let owner_uid = self.core.active_owner_uid_for_ifname(&self.ifname).await;
+        auth::require_activation_access(bus, header, owner_uid, "Device.Disconnect").await?;
         self.core
             .disconnect_device(&self.ifname)
             .await

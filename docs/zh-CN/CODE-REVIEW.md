@@ -71,11 +71,12 @@ lease hook，以及尚未在真实 plasma-nm/GNOME 面板上验证。自动测�
 - 可选 wpa_supplicant D-Bus 后端可编译，但未在真实
   <code>fi.w1.wpa_supplicant1</code> 服务上运行（stock FreeBSD 没有）；mock 测试覆盖协议链路。
 - 尚未测试真实 plasma-nm 和 GNOME 面板；XFCE 已在隔离的真实面板中测试。
-- Phase 1 已把完整 D-Bus 访问限制到 <code>wheel</code>/<code>network</code>，
-  守护进程也会检查 caller uid；其他本地用户只读。仍然没有 polkit/SecretAgent。
-  keyring 是独立的 0600 文件，但没有静态加密，root（以及能读取 root 文件的人）可以恢复 PSK。
-- 不属于 <code>wheel</code>/<code>network</code> 的桌面用户会得到只读界面，
-  直到被加入其中一个组。这是有意设计，不是 bug。
+- 完整 D-Bus 控制仍限制到 <code>wheel</code>/<code>network</code>；profile owner
+  可以激活/断开自己的 profile 并读取自己的密钥。settings 写入仍要求管理员组。
+  仍然没有 polkit/SecretAgent。keyring 是独立的 0600 文件，但没有静态加密，
+  root（以及能读取 root 文件的人）可以恢复 PSK。
+- 不属于 <code>wheel</code>/<code>network</code> 的桌面用户可以管理自己的 profile，
+  但编辑系统设置前仍需要加入其中一个组。
 - 本机 FreeBSD GNOME Control Center 没有 network 面板，也没有链接 <code>libnm</code>；
   <code>networkmanager-shim</code> 是编译空壳。D-Bus 服务无法让编译时未启用 NM 的前端
   出现面板。Phase 4 需要功能性 libnm/NetworkManagerQt 和重新构建的桌面包。

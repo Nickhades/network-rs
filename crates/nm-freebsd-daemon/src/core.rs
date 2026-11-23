@@ -136,30 +136,28 @@ impl Core {
     async fn dedupe_profiles(self: &Arc<Self>) {
         let duplicates: Vec<OwnedObjectPath> = {
             let state = self.state.read().await;
-            let mut newest: HashMap<Vec<u8>, (u64, OwnedObjectPath)> = HashMap::new();
+            let mut newest: HashMap<(Vec<u8>, Option<u32>), (u64, OwnedObjectPath)> =
+                HashMap::new();
             let mut duplicates = Vec::new();
             for profile in state
                 .connections
                 .values()
                 .filter(|profile| profile.kind == ProfileKind::Wifi)
             {
-                match newest.get(&profile.ssid) {
+                let key = (profile.ssid.clone(), profile.owner_uid);
+                match newest.get(&key) {
                     Some((timestamp, _path)) if *timestamp >= profile.timestamp => {
                         duplicates.push(profile.path.clone());
                     }
                     Some(_) => {
-                        if let Some((_timestamp, old_path)) = newest.insert(
-                            profile.ssid.clone(),
-                            (profile.timestamp, profile.path.clone()),
-                        ) {
+                        if let Some((_timestamp, old_path)) =
+                            newest.insert(key, (profile.timestamp, profile.path.clone()))
+                        {
                             duplicates.push(old_path);
                         }
                     }
                     None => {
-                        newest.insert(
-                            profile.ssid.clone(),
-                            (profile.timestamp, profile.path.clone()),
-                        );
+                        newest.insert(key, (profile.timestamp, profile.path.clone()));
                     }
                 }
             }
@@ -610,6 +608,37 @@ impl Core {
             .ok_or_else(|| CoreError::UnknownObject(uuid.to_string()))
     }
 
+    pub async fn connection_owner_uid(&self, connection: &OwnedObjectPath) -> Option<u32> {
+        self.state
+            .read()
+            .await
+            .connections
+            .get(connection)
+            .and_then(|profile| profile.owner_uid)
+    }
+
+    pub async fn active_owner_uid(&self, active: &OwnedObjectPath) -> Option<u32> {
+        let connection = self
+            .state
+            .read()
+            .await
+            .active
+            .get(active)
+            .map(|entry| entry.connection_path.clone())?;
+        self.connection_owner_uid(&connection).await
+    }
+
+    pub async fn active_owner_uid_for_ifname(&self, ifname: &str) -> Option<u32> {
+        let active = self
+            .state
+            .read()
+            .await
+            .devices
+            .get(ifname)
+            .and_then(|device| device.active_connection.clone())?;
+        self.active_owner_uid(&active).await
+    }
+
     pub async fn connection_secrets_by_uuid(&self, uuid: &str) -> Result<SettingsMap, CoreError> {
         let profile = self
             .state
@@ -968,6 +997,7 @@ impl Core {
         device: &OwnedObjectPath,
         specific: &OwnedObjectPath,
         owner_uid: Option<u32>,
+        admin: bool,
     ) -> Result<(OwnedObjectPath, OwnedObjectPath), CoreError> {
         let mut draft =
             profile_store::parse_settings(settings, None).map_err(CoreError::InvalidArgs)?;
@@ -980,7 +1010,11 @@ impl Core {
             state
                 .connections
                 .values()
-                .find(|profile| profile.kind == draft.kind && profile.ssid == draft.ssid)
+                .find(|profile| {
+                    profile.kind == draft.kind
+                        && profile.ssid == draft.ssid
+                        && (profile.owner_uid == owner_uid || admin)
+                })
                 .map(|profile| (profile.uuid.clone(), profile.path.clone()))
         };
         if let Some((uuid, _path)) = &existing {
@@ -998,6 +1032,7 @@ impl Core {
                             && profile.path != connection
                             && profile.kind == draft.kind
                             && profile.ssid == draft.ssid
+                            && profile.owner_uid == owner_uid
                     })
                     .map(|profile| profile.path.clone())
                     .collect()
