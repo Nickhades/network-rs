@@ -40,9 +40,10 @@
 
 ## 版本历史
 
-- **v0.2.13 / main** — DHCP 自动选择优先已安装的
-  <code>dhcpcd</code>，否则回退 base <code>dhclient</code>；rc 服务仍默认
-  <code>--no-initial-scan</code>。本文档描述当前代码。
+- **v0.2.15 / main** — 优先已安装的 <code>dhcpcd</code>，同时识别
+  per-interface 进程和全局 <code>/var/run/dhcpcd/pid</code> manager，
+  跨接口复用系统 dhcpcd；rc 仍默认 <code>--no-initial-scan</code>。
+  本文档描述当前代码。
 - 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
   历史说明见 GitHub releases。
 

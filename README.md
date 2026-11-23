@@ -53,9 +53,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.2.13 / main** — DHCP auto-selection now prefers an installed
-  `dhcpcd` and falls back to base `dhclient`; the rc service still defaults
-  to `--no-initial-scan`. This document describes the current tree.
+- **v0.2.15 / main** — prefer an installed `dhcpcd`, detect both the
+  per-interface process and the global `/var/run/dhcpcd/pid` manager, and reuse
+  the system dhcpcd across interfaces; rc still defaults to
+  `--no-initial-scan`. This document describes the current tree.
 - Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
   GitHub releases page for their historical notes.
 

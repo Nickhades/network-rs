@@ -66,6 +66,8 @@ pub struct DhcpManager {
     tx: mpsc::Sender<DhcpEvent>,
     children: Mutex<HashMap<String, u32>>,
     reused: Mutex<HashSet<String>>,
+    /// Disabled only by unit tests that must not see the host dhcpcd.
+    external_detection: bool,
 }
 
 impl DhcpManager {
@@ -88,6 +90,7 @@ impl DhcpManager {
             tx,
             children: Mutex::new(HashMap::new()),
             reused: Mutex::new(HashSet::new()),
+            external_detection: true,
         }
     }
 
@@ -118,7 +121,8 @@ impl DhcpManager {
         // backend while the other client already manages this interface
         // produces two leases and two addresses. Reuse the external client
         // instead of launching a third process.
-        if let Some(other) = other_backend(self.kind)
+        if self.external_detection
+            && let Some(other) = other_backend(self.kind)
             && let Some(pid) = external_pid(ifname, other)
         {
             if self.is_managed(ifname) {
@@ -178,8 +182,10 @@ impl DhcpManager {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
-        if let Some(pid) = self.existing_pid(ifname) {
-            if replace_existing {
+        if self.external_detection
+            && let Some(pid) = self.existing_pid(ifname)
+        {
+            if replace_existing && self.kind != DhcpBackendKind::Dhcpcd {
                 tracing::info!(
                     ifname,
                     pid,
@@ -332,14 +338,18 @@ impl DhcpManager {
     }
 
     fn existing_pid(&self, ifname: &str) -> Option<u32> {
-        let path = match self.kind {
-            DhcpBackendKind::Dhclient => dhclient_pid_path(ifname),
-            DhcpBackendKind::Dhcpcd => PathBuf::from(format!("/var/run/dhcpcd/{ifname}.pid")),
-            _ => return None,
-        };
-        let text = std::fs::read_to_string(path).ok()?;
-        let pid: u32 = text.trim().parse().ok()?;
-        pid_alive(pid).then_some(pid)
+        match self.kind {
+            DhcpBackendKind::Dhclient => {
+                let path = dhclient_pid_path(ifname);
+                pid_from_file(&path)
+            }
+            // FreeBSD's dhcpcd is a global manager with per-interface BPF
+            // children and no per-interface PID file. If the manager exists,
+            // it owns every interface and must not be replaced by a second
+            // daemon-managed dhcpcd.
+            DhcpBackendKind::Dhcpcd => dhcpcd_iface_pid(ifname).or_else(dhcpcd_manager_pid),
+            _ => None,
+        }
     }
 
     fn cleanup_pid_file(&self, ifname: &str, pid: u32) {
@@ -366,6 +376,10 @@ fn dhcpcd_iface_pid(ifname: &str) -> Option<u32> {
         return None;
     }
     parse_dhcpcd_pid(&String::from_utf8_lossy(&output.stdout), ifname)
+}
+
+fn dhcpcd_manager_pid() -> Option<u32> {
+    pid_from_file(Path::new("/var/run/dhcpcd/pid"))
 }
 
 fn parse_dhcpcd_pid(text: &str, ifname: &str) -> Option<u32> {
@@ -399,7 +413,7 @@ fn other_backend(kind: DhcpBackendKind) -> Option<DhcpBackendKind> {
 fn external_pid(ifname: &str, backend: DhcpBackendKind) -> Option<u32> {
     match backend {
         DhcpBackendKind::Dhclient => pid_from_file(&dhclient_pid_path(ifname)),
-        DhcpBackendKind::Dhcpcd => dhcpcd_iface_pid(ifname),
+        DhcpBackendKind::Dhcpcd => dhcpcd_iface_pid(ifname).or_else(dhcpcd_manager_pid),
         DhcpBackendKind::Auto | DhcpBackendKind::Disabled => None,
     }
 }
@@ -536,7 +550,9 @@ mod tests {
         config.dhcp_backend = DhcpBackendKind::Dhclient;
         config.dhclient_path = script;
         let (tx, mut rx) = mpsc::channel(8);
-        let manager = Arc::new(DhcpManager::new(&config, tx));
+        let mut manager = DhcpManager::new(&config, tx);
+        manager.external_detection = false;
+        let manager = Arc::new(manager);
         let started = manager
             .start("nmtest0", false)
             .expect("start fake dhclient");
