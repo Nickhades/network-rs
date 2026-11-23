@@ -17,7 +17,7 @@ SecretAgent/polkit、IPv6、有线激活，以及尚未在真实 plasma-nm/GNOME
 
 - <code>cargo fmt --all --check</code>
 - <code>cargo clippy --workspace --all-targets -- -D warnings</code>
-- <code>cargo test --workspace</code>：16 个 common + 18 个 daemon + 1 个 plugin
+- <code>cargo test --workspace</code>：16 个 common + 25 个 daemon + 1 个 plugin
   + 2 个端到端集成测试
 - daemon 和 XFCE 插件 release 构建
 - 插件 <code>dlopen</code> + <code>xfce_panel_module_init</code> 符号检查
@@ -34,6 +34,8 @@ SecretAgent/polkit、IPv6、有线激活，以及尚未在真实 plasma-nm/GNOME
 | 高 | D-Bus 通知 | 在 D-Bus 方法内部用 <code>ObjectServer::interface(..).get_mut()</code> 发送属性变化，会与 dispatcher 的读锁死锁。 | 所有通知直接用 <code>SignalEmitter</code> 和显式 <code>PropertiesChanged</code> 字典。 |
 | 高 | XFCE 插件 | <code>std::fs::read("/dev/urandom")</code> 会读到 EOF，导致 worker 永久阻塞。 | 打开文件后 <code>read_exact</code> 16 字节，失败时用时间兜底。 |
 | 高 | 配置 | 客户端提供的 UUID 变成文件名，可路径穿越（<code>../../...</code>）。 | 输入时解析/重新生成 UUID，加载和保存时校验；测试覆盖。 |
+| 高 | 密钥 | Wi-Fi PSK 与普通配置元数据一起明文存放在 profile JSON。 | 移到独立的 0600 <code>keyring.json</code>，迁移旧 <code>psk</code> 字段，profile JSON 不再包含密钥。 |
+| 高 | 授权 | 策略允许所有本地用户执行完整方法调用，<code>GetPermissions</code> 永远返回 yes。 | 完整权限限制到 root/<code>wheel</code>/<code>network</code>；守护进程对修改类方法检查 caller uid；<code>GetPermissions</code> 解析 uid，其他用户只读。 |
 | 中 | 配置 | 同一 UUID 添加第二个配置会创建两个路径并覆盖同一个 JSON。 | 复用已有路径并发送 <code>Updated</code>。 |
 | 中 | 激活 | 停用操作可能落在激活任务最后一次检查和状态写入之间，留下 ACTIVATED 设备。 | 完成/失败路径在写锁内重新检查活动对象存在且不是 DEACTIVATED。 |
 | 中 | IP4Config | 激活时在把新地址写入设备之前创建 IP4Config，首次连接永远创建不出对象。 | 先发布地址再调用 <code>ensure_ip4_config</code>；断开时清理旧对象。 |
@@ -45,6 +47,7 @@ SecretAgent/polkit、IPv6、有线激活，以及尚未在真实 plasma-nm/GNOME
 | 低 | AP | 已有 AP 的信号强度变化时没有 <code>PropertiesChanged</code>。 | 每次扫描后发送每个 AP 的变化。 |
 | 低 | wpa 后端 | <code>SAVE_CONFIG</code> 可能悄悄改写 <code>/etc/wpa_supplicant.conf</code>。 | 移除；配置保存在守护进程状态目录。 |
 | 低 | wpa D-Bus | 后端只轮询 BSS，没有订阅真实 <code>ScanDone</code> 信号。 | 监听 <code>Interface.ScanDone</code> 后刷新 BSS；mock 集成测试证明链路。 |
+| 低 | 后端选择 | auto 回退到控制 socket 时没有说明原因，debug 级别也看不到。 | debug 日志明确记录 <code>fi.w1.wpa_supplicant1</code> 不可用、auto 使用控制 socket。 |
 | 低 | 脚本 | 冒烟测试 GVariant 数字解析把类型宽度也算进去（<code>&lt;uint32 50&gt;</code> 变成 3250），选项循环会跳过值。 | 取最后一个字段、去前导零，改用 <code>while</code> 参数循环。 |
 | 低 | 脚本 | 隔离桌面测试把 D-Bus socket 放在含非 ASCII 字节的路径下，D-Bus 拒绝。 | 运行时状态放 <code>/tmp</code>，截图/日志复制回仓库。 |
 | 低 | 打包 | Port Makefile 在 <code>bsd.port.options.mk</code> 之前使用 <code>PORT_OPTIONS</code>，并假设 target 目录。 | 加入 <code>bsd.port.options.mk</code> 和显式 <code>CARGO_BUILD_TARGET_DIR</code>。 |
@@ -60,7 +63,11 @@ SecretAgent/polkit、IPv6、有线激活，以及尚未在真实 plasma-nm/GNOME
 - 可选 wpa_supplicant D-Bus 后端可编译，但未在真实
   <code>fi.w1.wpa_supplicant1</code> 服务上运行（stock FreeBSD 没有）；mock 测试覆盖协议链路。
 - 尚未测试真实 plasma-nm 和 GNOME 面板；XFCE 已在隔离的真实面板中测试。
-- D-Bus 策略允许所有本地用户调用 root 守护进程，没有授权层；多用户机器应收紧策略。
+- Phase 1 已把完整 D-Bus 访问限制到 <code>wheel</code>/<code>network</code>，
+  守护进程也会检查 caller uid；其他本地用户只读。仍然没有 polkit/SecretAgent。
+  keyring 是独立的 0600 文件，但没有静态加密，root（以及能读取 root 文件的人）可以恢复 PSK。
+- 不属于 <code>wheel</code>/<code>network</code> 的桌面用户会得到只读界面，
+  直到被加入其中一个组。这是有意设计，不是 bug。
 - 如果 <code>activate</code> 第一次 <code>ObjectServer::at</code> 注册期间发生停用，
   可能留下孤立的 active 对象；窗口很窄（回调返回前立即停用），重启守护进程会清理。
   每设备激活互斥锁可以彻底关闭该窗口。

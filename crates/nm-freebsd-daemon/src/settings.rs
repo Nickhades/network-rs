@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use nm_common::ssid::ssid_to_string;
 use serde::{Deserialize, Serialize};
@@ -28,7 +30,9 @@ pub struct StoredProfile {
     pub ifname: Option<String>,
     #[serde(default)]
     pub ssid: Vec<u8>,
-    #[serde(default)]
+    /// Legacy location. New writes go to keyring.json and this field is not
+    /// serialized; it is kept deserializable so existing installs migrate.
+    #[serde(default, skip_serializing)]
     pub psk: Option<String>,
     #[serde(default)]
     pub key_mgmt: Option<String>,
@@ -40,6 +44,120 @@ pub struct StoredProfile {
 
 fn default_true() -> bool {
     true
+}
+
+const KEYRING_FILE: &str = "keyring.json";
+static KEYRING_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Keyring {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    secrets: HashMap<String, SecretEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct SecretEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    psk: Option<String>,
+}
+
+fn keyring_path(state_dir: &Path) -> PathBuf {
+    state_dir.join(KEYRING_FILE)
+}
+
+fn read_keyring(state_dir: &Path) -> io::Result<Keyring> {
+    if state_dir.is_dir() {
+        // Tighten installations created by older versions with a permissive
+        // umask before reading or writing any secret.
+        set_mode(state_dir, 0o700)?;
+    }
+    let path = keyring_path(state_dir);
+    match fs::read(&path) {
+        Ok(bytes) => {
+            let keyring: Keyring = serde_json::from_slice(&bytes).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: {error}", path.display()),
+                )
+            })?;
+            // The file may have been created by an older version with a
+            // permissive umask. Tighten it before using any secret.
+            set_mode(&path, 0o600)?;
+            Ok(keyring)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Keyring {
+            version: 1,
+            secrets: HashMap::new(),
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_keyring(state_dir: &Path, keyring: &Keyring) -> io::Result<()> {
+    fs::create_dir_all(state_dir)?;
+    set_mode(state_dir, 0o700)?;
+    let path = keyring_path(state_dir);
+    let tmp = state_dir.join(format!(".keyring.json.{}.tmp", std::process::id()));
+    // A previous daemon may have crashed before its rename. The file is
+    // private and this process holds KEYRING_LOCK, so removing the stale
+    // temporary is safe and avoids a permanent EEXIST failure.
+    let _ = fs::remove_file(&tmp);
+    let text = serde_json::to_vec_pretty(keyring)?;
+    let mut file = open_private_file(&tmp)?;
+    if let Err(error) = file.write_all(&text).and_then(|_| file.sync_all()) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    set_mode(&path, 0o600)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_private_file(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_private_file(path: &Path) -> io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+fn secret_for<'a>(keyring: &'a Keyring, uuid: &str) -> Option<&'a str> {
+    keyring
+        .secrets
+        .get(uuid)
+        .and_then(|entry| entry.psk.as_deref())
+}
+
+fn put_secret(keyring: &mut Keyring, uuid: &str, psk: Option<&str>) -> bool {
+    let changed = match psk {
+        Some(psk) => {
+            let entry = keyring.secrets.entry(uuid.to_string()).or_default();
+            let changed = entry.psk.as_deref() != Some(psk);
+            entry.psk = Some(psk.to_string());
+            changed
+        }
+        None => keyring.secrets.remove(uuid).is_some(),
+    };
+    if keyring.version == 0 {
+        keyring.version = 1;
+    }
+    changed
 }
 
 #[derive(Debug, Clone)]
@@ -284,7 +402,24 @@ pub fn connections_dir(state_dir: &Path) -> PathBuf {
 
 pub fn load_profiles(state_dir: &Path) -> Vec<StoredProfile> {
     let dir = connections_dir(state_dir);
+    let _guard = KEYRING_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (mut keyring, keyring_ok) = match read_keyring(state_dir) {
+        Ok(keyring) => (keyring, true),
+        Err(error) => {
+            tracing::warn!(%error, "keyring is unreadable; saved passwords will be unavailable");
+            (
+                Keyring {
+                    version: 1,
+                    secrets: HashMap::new(),
+                },
+                false,
+            )
+        }
+    };
     let mut profiles = Vec::new();
+    let mut migrated = Vec::new();
     let Ok(entries) = fs::read_dir(&dir) else {
         return profiles;
     };
@@ -296,15 +431,44 @@ pub fn load_profiles(state_dir: &Path) -> Vec<StoredProfile> {
         match fs::read_to_string(&path)
             .and_then(|text| serde_json::from_str::<StoredProfile>(&text).map_err(io::Error::from))
         {
-            Ok(profile) => {
+            Ok(mut profile) => {
                 if Uuid::parse_str(&profile.uuid).is_err() {
                     tracing::warn!(path = %path.display(), "ignoring profile with invalid uuid");
                     continue;
+                }
+                if let Some(psk) = profile.psk.take() {
+                    // Migrate a legacy plaintext profile in place: the secret
+                    // moves to keyring.json, and the profile is rewritten
+                    // without the psk field.
+                    put_secret(&mut keyring, &profile.uuid, Some(&psk));
+                    profile.psk = Some(psk);
+                    migrated.push(profile.uuid.clone());
+                } else if let Some(psk) = secret_for(&keyring, &profile.uuid) {
+                    profile.psk = Some(psk.to_string());
                 }
                 profiles.push(profile);
             }
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "ignoring unreadable connection profile")
+            }
+        }
+    }
+    if !migrated.is_empty() && !keyring_ok {
+        tracing::warn!(
+            "not migrating legacy passwords: the existing keyring is unreadable; refusing to overwrite it"
+        );
+    } else if !migrated.is_empty() {
+        tracing::info!(
+            count = migrated.len(),
+            "migrating legacy plaintext passwords into keyring.json"
+        );
+        if let Err(error) = write_keyring(state_dir, &keyring) {
+            tracing::warn!(%error, "failed to migrate passwords into keyring");
+        } else {
+            for profile in profiles.iter().filter(|p| migrated.contains(&p.uuid)) {
+                if let Err(error) = write_profile_file(state_dir, profile) {
+                    tracing::warn!(uuid = %profile.uuid, %error, "failed to rewrite migrated profile");
+                }
             }
         }
     }
@@ -319,6 +483,16 @@ pub fn save_profile(state_dir: &Path, profile: &StoredProfile) -> io::Result<()>
             "profile uuid is not a UUID",
         ));
     }
+    let _guard = KEYRING_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut keyring = read_keyring(state_dir)?;
+    put_secret(&mut keyring, &profile.uuid, profile.psk.as_deref());
+    write_keyring(state_dir, &keyring)?;
+    write_profile_file(state_dir, profile)
+}
+
+fn write_profile_file(state_dir: &Path, profile: &StoredProfile) -> io::Result<()> {
     let dir = connections_dir(state_dir);
     fs::create_dir_all(&dir)?;
     set_mode(&dir, 0o700)?;
@@ -332,6 +506,13 @@ pub fn save_profile(state_dir: &Path, profile: &StoredProfile) -> io::Result<()>
 }
 
 pub fn delete_profile(state_dir: &Path, uuid: &str) -> io::Result<()> {
+    let _guard = KEYRING_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut keyring = read_keyring(state_dir)?;
+    if put_secret(&mut keyring, uuid, None) {
+        write_keyring(state_dir, &keyring)?;
+    }
     let path = connections_dir(state_dir).join(format!("{uuid}.json"));
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -512,9 +693,96 @@ mod tests {
         let draft = parse_settings(&wifi_settings(), None).unwrap();
         let stored = StoredProfile::from_draft(&draft);
         save_profile(dir.path(), &stored).unwrap();
+
+        let profile_path = connections_dir(dir.path()).join(format!("{}.json", stored.uuid));
+        let profile_json = fs::read_to_string(&profile_path).unwrap();
+        assert!(!profile_json.contains("hunter2hunter2"));
+        assert!(!profile_json.contains("\"psk\""));
+
+        let keyring = read_keyring(dir.path()).unwrap();
+        assert_eq!(
+            keyring.secrets[&stored.uuid].psk.as_deref(),
+            Some("hunter2hunter2")
+        );
+
         let loaded = load_profiles(dir.path());
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].uuid, stored.uuid);
         assert_eq!(loaded[0].psk.as_deref(), Some("hunter2hunter2"));
+    }
+
+    #[test]
+    fn keyring_file_is_private() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let draft = parse_settings(&wifi_settings(), None).unwrap();
+        let stored = StoredProfile::from_draft(&draft);
+        save_profile(dir.path(), &stored).unwrap();
+        let path = keyring_path(dir.path());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(fs::metadata(&path).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn legacy_plaintext_profile_is_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn_dir = connections_dir(dir.path());
+        fs::create_dir_all(&conn_dir).unwrap();
+        let uuid = Uuid::new_v4().to_string();
+        let legacy = serde_json::json!({
+            "uuid": uuid,
+            "id": "Legacy Cafe",
+            "kind": "wifi",
+            "ssid": b"Cafe WiFi".to_vec(),
+            "psk": "oldsecret",
+            "key_mgmt": "WPA-PSK",
+            "autoconnect": true,
+            "timestamp": 1
+        });
+        fs::write(
+            conn_dir.join(format!("{uuid}.json")),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load_profiles(dir.path());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].psk.as_deref(), Some("oldsecret"));
+
+        let profile_text = fs::read_to_string(conn_dir.join(format!("{uuid}.json"))).unwrap();
+        assert!(!profile_text.contains("oldsecret"));
+        assert!(!profile_text.contains("\"psk\""));
+        assert_eq!(
+            read_keyring(dir.path()).unwrap().secrets[&uuid]
+                .psk
+                .as_deref(),
+            Some("oldsecret")
+        );
+    }
+
+    #[test]
+    fn delete_removes_keyring_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let draft = parse_settings(&wifi_settings(), None).unwrap();
+        let stored = StoredProfile::from_draft(&draft);
+        save_profile(dir.path(), &stored).unwrap();
+        delete_profile(dir.path(), &stored.uuid).unwrap();
+        assert!(
+            !keyring_path(dir.path()).exists() || {
+                let keyring = read_keyring(dir.path()).unwrap();
+                !keyring.secrets.contains_key(&stored.uuid)
+            }
+        );
+        assert!(
+            !connections_dir(dir.path())
+                .join(format!("{}.json", stored.uuid))
+                .exists()
+        );
     }
 }

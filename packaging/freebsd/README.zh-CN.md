@@ -74,6 +74,18 @@ Port 的 XFCE 选项默认关闭；XFCE 系统上用 <code>make config</code> �
     sysrc nm_freebsd_enable=YES
     service nm_freebsd start
 
+## 访问控制
+
+D-Bus 策略只向 root 和 <code>wheel</code> 或 <code>network</code> 组成员授予完整控制权；
+其他本地用户只有只读调用。如果桌面用户不在 <code>wheel</code>，把它加入
+<code>network</code>：
+
+    pw groupmod network -m <user>
+
+然后注销并重新登录。在 polkit/SecretAgent 完成前，不要在共享、多用户或存在不可信本地用户的
+机器上安装本 MVP。保存的 PSK 位于 <code>/var/db/nm-freebsd/keyring.json</code>（0600），
+但没有静态加密。
+
 ## 说明
 
 - 守护进程必须以 root 运行：wpa_supplicant 控制 socket 是 <code>root:wheel</code>，

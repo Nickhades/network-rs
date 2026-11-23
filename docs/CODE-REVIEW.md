@@ -19,7 +19,7 @@ this repository. This is a working review, not a formal security audit.
 
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace`: 16 common + 18 daemon + 1 plugin + 2 end-to-end
+- `cargo test --workspace`: 16 common + 25 daemon + 1 plugin + 2 end-to-end
   integration tests (control socket and mock wpa D-Bus)
 - release build of daemon and XFCE plugin
 - plugin `dlopen` + `xfce_panel_module_init` symbol check
@@ -37,6 +37,8 @@ this repository. This is a working review, not a formal security audit.
 | High | D-Bus notifications | Emitting property changes with `ObjectServer::interface(..).get_mut()` from inside a method deadlocked against the dispatcher's read lock. | All notifications use `SignalEmitter` directly with explicit `PropertiesChanged` dictionaries. |
 | High | XFCE plugin | `std::fs::read("/dev/urandom")` reads until EOF and would block the worker forever. | Open the file and `read_exact` 16 bytes, with a time fallback. |
 | High | Profiles | The client-supplied UUID became a filename, allowing path traversal (`../../...`). | UUID is parsed/regenerated on input, validated on load and save; tests cover both. |
+| High | Secrets | Wi-Fi PSKs were stored inside the profile JSON next to non-secret metadata. | Move secrets to a separate 0600 `keyring.json`, migrate legacy `psk` fields, and keep profile JSON secret-free. |
+| High | Authorization | The policy allowed all local users full method calls and `GetPermissions` always said yes. | Full access limited to root/`wheel`/`network`; daemon checks caller uid on mutating methods; `GetPermissions` resolves the uid and reports read-only for others. |
 | Medium | Profiles | Adding a second profile with an existing UUID created two paths and could overwrite the same JSON file. | Reuse the existing path and emit `Updated`. |
 | Medium | Activation | Deactivate could race the activation task between its last check and the state write, leaving a device marked ACTIVATED. | The completion/failure paths re-check that the active object still exists and is not DEACTIVATED inside the write lock. |
 | Medium | IP4Config | Activation created IP4Config before copying the new address into the device, so the object was never created on first connect. | Publish the address before `ensure_ip4_config`; remove stale objects on disconnect. |
@@ -50,6 +52,7 @@ this repository. This is a working review, not a formal security audit.
 | Low | Packaging | Port Makefile option conditionals used `PORT_OPTIONS` before `bsd.port.options.mk`, and assumed the target directory. | Added `bsd.port.options.mk` and an explicit `CARGO_BUILD_TARGET_DIR`. |
 | Low | Wi-Fi | wpa_supplicant prints non-ASCII SSIDs as literal `\xNN` sequences; AP `Ssid` contained backslash ASCII instead of the real bytes. | `unescape_wpa` in `nm-common`, used by scan/status parsing, with tests; live scan confirmed raw UTF-8 bytes. |
 | Low | wpa D-Bus | The backend only polled BSSs; it did not subscribe to the real `ScanDone` signal. | `Interface.ScanDone` listener triggers BSS refresh; mock integration test proves the chain. |
+| Low | Backend selection | Auto mode fell back to the control socket without saying why, even at debug level. | Debug log now states that `fi.w1.wpa_supplicant1` was unavailable and auto mode used the control socket. |
 | Low | Scripts | Smoke-test GVariant numeric parsing included the type width (`<uint32 50>` became 3250), and its option loop skipped values. | Parse the last field, strip leading zeroes, and use a `while` argument loop. |
 | Low | Scripts | The isolated desktop test put its D-Bus socket under a path containing non-ASCII bytes, which D-Bus rejects. | Runtime state moved to `/tmp`; screenshots/logs copied back to the repository. |
 
@@ -67,8 +70,12 @@ this repository. This is a working review, not a formal security audit.
   one).
 - Live plasma-nm and GNOME panel compatibility is still untested; XFCE was
   tested in an isolated real panel.
-- The D-Bus policy allows all local users to call the root daemon. There is no
-  authorization layer; tighten the policy for multi-user machines.
+- Phase 1 restricts full D-Bus access to `wheel`/`network` and checks the
+  caller uid in the daemon; other local users are read-only. There is still no
+  polkit/SecretAgent. The keyring is a separate 0600 file but is not encrypted at
+  rest, so root (and anyone who can read root files) can recover PSKs.
+- A non-`wheel`/`network` desktop user gets a read-only UI until added to one of
+  those groups. This is deliberate, not a bug.
 - A deactivate that races the very first `ObjectServer::at` registration in
   `activate` can leave an orphaned active-connection object. The window is
   narrow (immediate deactivate before the callback returns) and the object is

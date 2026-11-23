@@ -69,6 +69,18 @@ Then reload the bus so it reads the new policy:
     sysrc nm_freebsd_enable=YES
     service nm_freebsd start
 
+## Access control
+
+The D-Bus policy grants full control only to root and members of `wheel` or
+`network`; other local users get read-only calls. Add the desktop user to
+`network` if they are not in `wheel`:
+
+    pw groupmod network -m <user>
+
+Log out and back in afterwards. Do not install this MVP on a multi-user or
+hostile-local-user machine until polkit/SecretAgent support lands. Saved PSKs
+are in `/var/db/nm-freebsd/keyring.json` (0600) but are not encrypted at rest.
+
 ## Notes
 
 - The daemon must run as root: wpa_supplicant's control socket is root:wheel

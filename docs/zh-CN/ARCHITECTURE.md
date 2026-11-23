@@ -81,7 +81,26 @@ dispatcher 已经持有该接口的读锁，而处理函数又等待同一个对
   状态每 2 秒轮询一次，10 秒一次的 BSS 轮询作为兜底。Auto 模式只有在总线名被拥有时才选择它。
 
 <code>Auto</code> 会探测 D-Bus 名称，否则选择控制 socket。显式 <code>--backend</code>
-在 auto 模式之外不会被静默降级。
+在 auto 模式之外不会被静默降级。debug 级别会记录“D-Bus 名称不可用、auto 回退控制 socket”，
+避免 ports 构建启用 wpa_supplicant D-Bus 选项后行为变化却没有提示。
+
+## 安全与授权
+
+访问控制有三层：
+
+1. 安装的 D-Bus 策略向 root 和 <code>wheel</code>/<code>network</code> 组成员授予完整
+   send 权限；其他本地用户只允许明确的只读方法（<code>Properties.Get/GetAll</code>、
+   Manager 查询、AP 发现/扫描、不含密钥的 settings 元数据）。
+2. <code>auth.rs</code> 通过 <code>org.freedesktop.DBus.GetConnectionUnixUser</code>
+   解析 caller 的 Unix uid，检查 root 或上述组成员资格。守护进程实现的每个修改类方法都调用
+   <code>require_admin</code>；<code>GetPermissions</code> 把同样的判断返回给前端。
+   <code>GetSecrets</code> 只允许管理员。
+3. 保存的 PSK 位于 <code>/var/db/nm-freebsd/keyring.json</code>（0600），与 0600 的
+   profile JSON 分离。旧 profile 中的明文 <code>psk</code> 在加载时迁移。
+   keyring 没有静态加密，root 可以读取；这是隔离/最小暴露措施，不是密钥保险库。
+
+目前仍没有 polkit 或 SecretAgent。不属于管理员组的桌面用户会得到只读界面；
+README 警告说明了如何通过 <code>network</code> 组授权。
 
 ## 激活
 

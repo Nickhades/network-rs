@@ -3,6 +3,7 @@
 //! The crate is a library so the integration tests can start the daemon
 //! in-process against a private bus and a fake wpa_supplicant control socket.
 
+pub mod auth;
 pub mod backend;
 pub mod config;
 pub mod core;

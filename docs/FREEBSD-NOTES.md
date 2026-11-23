@@ -73,10 +73,20 @@ Installed paths on FreeBSD:
 /usr/local/etc/rc.d/nm_freebsd
 ```
 
-The policy allows root to own the name and all local users to send to / receive
-from it. The service file lets the bus start the daemon on demand as root. The
-rc.d script uses `/usr/sbin/daemon -p` to background the daemon and writes
+The policy gives root and the `wheel` and `network` groups full method access;
+other local users get read-only Manager/Device/AP calls and settings metadata
+(no secrets). The daemon also checks the caller uid for every mutating method,
+so a policy mistake does not silently grant write access. The service file lets
+the bus start the daemon on demand as root. The rc.d script uses
+`/usr/sbin/daemon -p` to background the daemon and writes
 `/var/run/nm_freebsd.pid`.
+
+The desktop user must be in `wheel` or `network` for a writable UI:
+
+    pw groupmod network -m <user>
+
+The keyring is `/var/db/nm-freebsd/keyring.json` (0600); it is separate from
+the 0600 profile JSON, but not encrypted at rest.
 
 The FreeBSD dbus rc script has no reload command, so `scripts/install.sh`
 calls `org.freedesktop.DBus.ReloadConfig` through `dbus-send` after installing

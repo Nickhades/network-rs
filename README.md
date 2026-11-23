@@ -4,6 +4,18 @@
 
 Repository: <https://github.com/Nickhades/network-rs>
 
+> ### Security warning: do not install this on a multi-user system yet
+>
+> This MVP has no polkit and no SecretAgent. Full control is granted only to
+> root and members of the `wheel` and `network` groups; other local users get
+> read-only access. The desktop user must be in one of those groups:
+> `pw groupmod network -m <user>` (then log out and back in).
+> The daemon runs as root and can change machine-wide Wi-Fi settings.
+> Saved Wi-Fi passphrases live in `/var/db/nm-freebsd/keyring.json` (mode 0600)
+> separately from profiles, but they are **not encrypted at rest**: root can
+> read them. Do not install this on a shared, multi-user or hostile-local-user
+> machine until polkit/SecretAgent support lands.
+
 A native FreeBSD implementation of the NetworkManager D-Bus service, written in
 Rust. The daemon owns `org.freedesktop.NetworkManager` on the system bus and
 serves the object tree that desktop frontends already understand. Real network
@@ -50,6 +62,8 @@ Working, tested MVP on FreeBSD 15.1-RELEASE (amd64):
 - XFCE panel plugin builds as a `libxfce4panel-2.0` module, loads in a real
   `xfce4-panel` under an isolated Xvfb display, and renders the status button
   and network menu (screenshots below);
+- Phase 1 security hardening: `wheel`/`network` D-Bus policy, per-caller uid
+  checks, and a separate 0600 keyring for Wi-Fi passphrases;
 - one-click install, dependency check, compile/test, read-only smoke test and
   isolated desktop-test scripts are included.
 
@@ -73,6 +87,7 @@ FreeBSD. Those frontends are the next compatibility milestone; see
 | Transports | wpa_supplicant datagram control socket (default on FreeBSD), optional `fi.w1.wpa_supplicant1` D-Bus backend |
 | Link events | netlink RTM_GETLINK dump + multicast monitor, getifaddrs polling fallback |
 | Desktop | KDE/GNOME/XFCE/unknown detection and logging; XFCE panel plugin |
+| Security | `wheel`/`network` D-Bus policy, per-caller uid checks, truthful GetPermissions, separate 0600 keyring |
 | Packaging | D-Bus policy, activation service, rc.d script, port skeleton |
 
 See [docs/DBUS.md](docs/DBUS.md) for signatures and frontend notes,
@@ -250,22 +265,34 @@ require restarting the panel.
 
 Profiles are small JSON documents in `/var/db/nm-freebsd/connections/*.json`
 (directory 0700, files 0600). Only fields this daemon can apply are persisted:
-UUID, id, type, SSID (byte array), passphrase, key management, autoconnect and
-timestamp. The D-Bus settings dictionaries are reconstructed from those fields.
-Secrets are not logged.
+UUID, id, type, SSID (byte array), key management, autoconnect and timestamp.
+Passphrases are stored separately in `/var/db/nm-freebsd/keyring.json` (0600),
+keyed by profile UUID; older profiles with a plaintext `psk` are migrated on
+startup and rewritten without it. The D-Bus settings dictionaries are
+reconstructed from those fields. Secrets are never logged.
 
 ## Security
 
-There is no polkit integration in this MVP. The installed D-Bus policy allows
-all local users to call the service; only root may own the bus name. The daemon
-runs as root, so a local user can change the machine's Wi-Fi configuration.
-For multi-user or hostile-local-user systems, tighten
-`/usr/local/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf` (the file
-contains a commented group-based alternative). `GetPermissions` reports
-"yes" for the implemented operations to match the policy.
+The installed policy grants **full method access only to root and members of
+`wheel`/`network`**, and the daemon independently checks the caller uid for
+every mutating method it implements (activation, settings writes, secrets,
+enable/sleep); unprivileged `Properties.Set` is blocked by the policy.
+Unprivileged local users can read manager/device/AP properties, list saved
+connections without secrets, and request scans. `Properties.Set` and
+`GetSecrets` are denied to them by policy and daemon checks.
+`GetPermissions` resolves the caller uid and returns `yes`/`no` truthfully
+(scan is allowed for everyone; control operations are not).
 
-Do not expose the system bus to untrusted machines. Profiles contain Wi-Fi
-passphrases; treat `/var/db/nm-freebsd` as secret.
+There is still no polkit and no SecretAgent. A desktop user who is not in
+`wheel` or `network` gets a read-only UI; grant control with:
+
+    pw groupmod network -m <user>
+
+then log out and back in. For multi-user or hostile-local-user systems, do not
+install this MVP yet; wait for the polkit/SecretAgent phase. The keyring is a
+separate 0600 file, but it is **not encrypted at rest** and root can read it.
+Do not expose the system bus to untrusted machines. Treat
+`/var/db/nm-freebsd` as secret.
 
 ## Limitations and roadmap
 

@@ -4,9 +4,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use nm_common::consts::{connectivity, manager_state};
+use zbus::message::Header;
 use zbus::object_server::SignalEmitter;
-use zbus::{OwnedObjectPath, OwnedVariant, fdo, interface};
+use zbus::{Connection, OwnedObjectPath, OwnedVariant, fdo, interface};
 
+use crate::auth;
 use crate::core::{Core, CoreError};
 use crate::dbus::{SettingsMap, root_path};
 
@@ -142,7 +144,10 @@ impl ManagerIface {
         connection: OwnedObjectPath,
         device: OwnedObjectPath,
         specific_object: OwnedObjectPath,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
+        auth::require_admin(bus, header, "ActivateConnection").await?;
         self.core
             .activate(&connection, &device, &specific_object)
             .await
@@ -154,26 +159,49 @@ impl ManagerIface {
         connection: SettingsMap,
         device: OwnedObjectPath,
         specific_object: OwnedObjectPath,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<(OwnedObjectPath, OwnedObjectPath)> {
+        auth::require_admin(bus, header, "AddAndActivateConnection").await?;
         self.core
             .add_and_activate(&connection, &device, &specific_object)
             .await
             .map_err(Into::into)
     }
 
-    async fn deactivate_connection(&self, active_connection: OwnedObjectPath) -> fdo::Result<()> {
+    async fn deactivate_connection(
+        &self,
+        active_connection: OwnedObjectPath,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "DeactivateConnection").await?;
         self.core
             .deactivate(&active_connection)
             .await
             .map_err(Into::into)
     }
 
-    async fn enable(&self, enable: bool) {
+    async fn enable(
+        &self,
+        enable: bool,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "Enable").await?;
         self.core.set_networking_enabled(enable).await;
+        Ok(())
     }
 
-    async fn sleep(&self, sleep: bool) {
+    async fn sleep(
+        &self,
+        sleep: bool,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "Sleep").await?;
         self.core.set_networking_enabled(!sleep).await;
+        Ok(())
     }
 
     async fn check_connectivity(&self) -> u32 {
@@ -187,34 +215,34 @@ impl ManagerIface {
         }
     }
 
-    async fn get_permissions(&self) -> HashMap<String, String> {
-        // This MVP has no polkit integration. Be explicit rather than
-        // pretending to authorize: the D-Bus policy file controls access.
-        let mut permissions = HashMap::new();
-        for key in [
-            "org.freedesktop.NetworkManager.enable-disable-network",
-            "org.freedesktop.NetworkManager.enable-disable-wifi",
-            "org.freedesktop.NetworkManager.enable-disable-wwan",
-            "org.freedesktop.NetworkManager.sleep-wake",
-            "org.freedesktop.NetworkManager.wifi-share",
-            "org.freedesktop.NetworkManager.wifi-share-open",
-            "org.freedesktop.NetworkManager.wifi-scan",
-            "org.freedesktop.NetworkManager.network-control",
-            "org.freedesktop.NetworkManager.settings-modify-system",
-            "org.freedesktop.NetworkManager.settings-modify-own",
-            "org.freedesktop.NetworkManager.wifi-connect",
-        ] {
-            permissions.insert(key.to_string(), "yes".to_string());
-        }
-        permissions
+    async fn get_permissions(
+        &self,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<HashMap<String, String>> {
+        auth::permissions(bus, header).await
     }
 
-    async fn set_logging(&self, level: &str, domains: &str) {
+    async fn set_logging(
+        &self,
+        level: &str,
+        domains: &str,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "SetLogging").await?;
         tracing::debug!(level, domains, "SetLogging requested");
+        Ok(())
     }
 
-    async fn reload(&self) {
+    async fn reload(
+        &self,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "Reload").await?;
         tracing::debug!("Reload requested");
+        Ok(())
     }
 
     // ---- signals --------------------------------------------------------

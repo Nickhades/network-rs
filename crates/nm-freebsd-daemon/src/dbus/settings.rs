@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
+use zbus::message::Header;
 use zbus::object_server::SignalEmitter;
-use zbus::{OwnedObjectPath, fdo, interface};
+use zbus::{Connection, OwnedObjectPath, fdo, interface};
 
+use crate::auth;
 use crate::core::Core;
 use crate::dbus::SettingsMap;
 
@@ -41,7 +43,13 @@ impl SettingsIface {
             .map_err(Into::into)
     }
 
-    async fn add_connection(&self, connection: SettingsMap) -> fdo::Result<OwnedObjectPath> {
+    async fn add_connection(
+        &self,
+        connection: SettingsMap,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<OwnedObjectPath> {
+        auth::require_admin(bus, header, "AddConnection").await?;
         self.core
             .add_connection_from_settings(connection, true)
             .await
@@ -51,7 +59,10 @@ impl SettingsIface {
     async fn add_connection_unsaved(
         &self,
         connection: SettingsMap,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
+        auth::require_admin(bus, header, "AddConnectionUnsaved").await?;
         self.core
             .add_connection_from_settings(connection, false)
             .await
@@ -62,25 +73,45 @@ impl SettingsIface {
         &self,
         connection: OwnedObjectPath,
         settings: SettingsMap,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<bool> {
+        auth::require_admin(bus, header, "UpdateConnection").await?;
         self.core
             .update_connection_settings(&connection, settings, true)
             .await
             .map_err(Into::into)
     }
 
-    async fn delete_connection(&self, connection: OwnedObjectPath) -> fdo::Result<()> {
+    async fn delete_connection(
+        &self,
+        connection: OwnedObjectPath,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "DeleteConnection").await?;
         self.core
             .delete_connection(&connection)
             .await
             .map_err(Into::into)
     }
 
-    async fn reload_connections(&self) -> fdo::Result<bool> {
+    async fn reload_connections(
+        &self,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<bool> {
+        auth::require_admin(bus, header, "ReloadConnections").await?;
         self.core.reload_connections().await.map_err(Into::into)
     }
 
-    async fn save_hostname(&self, hostname: &str) -> fdo::Result<()> {
+    async fn save_hostname(
+        &self,
+        hostname: &str,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "SaveHostname").await?;
         self.core.set_hostname(hostname).await;
         Ok(())
     }
@@ -118,28 +149,51 @@ impl SettingsConnectionIface {
             .map_err(Into::into)
     }
 
-    async fn get_secrets(&self, _service: &str) -> fdo::Result<SettingsMap> {
+    async fn get_secrets(
+        &self,
+        _service: &str,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<SettingsMap> {
+        auth::require_admin(bus, header, "GetSecrets").await?;
         self.core
             .connection_secrets_by_uuid(&self.uuid)
             .await
             .map_err(Into::into)
     }
 
-    async fn update(&self, settings: SettingsMap) -> fdo::Result<()> {
+    async fn update(
+        &self,
+        settings: SettingsMap,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "Settings.Update").await?;
         self.core
             .update_connection_by_uuid(&self.uuid, settings, true)
             .await
             .map_err(Into::into)
     }
 
-    async fn update_unsaved(&self, settings: SettingsMap) -> fdo::Result<()> {
+    async fn update_unsaved(
+        &self,
+        settings: SettingsMap,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "Settings.UpdateUnsaved").await?;
         self.core
             .update_connection_by_uuid(&self.uuid, settings, false)
             .await
             .map_err(Into::into)
     }
 
-    async fn delete(&self) -> fdo::Result<()> {
+    async fn delete(
+        &self,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "Settings.Delete").await?;
         self.core
             .delete_connection_by_uuid(&self.uuid)
             .await

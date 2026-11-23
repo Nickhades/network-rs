@@ -1,0 +1,248 @@
+//! Caller authorization for the system-bus service.
+//!
+//! The D-Bus policy is the first gate. This module is the second: it resolves
+//! the caller's Unix uid, checks membership in the administrator groups, and
+//! gives the Manager.GetPermissions method a truthful answer.
+
+use std::collections::HashMap;
+use std::ffi::CString;
+
+use zbus::message::Header;
+use zbus::names::BusName;
+use zbus::{Connection, fdo};
+
+/// Groups allowed to change network state. The D-Bus policy grants the same
+/// groups full method access; keeping both in sync is intentional.
+pub const ADMIN_GROUPS: [&str; 2] = ["wheel", "network"];
+
+/// Permission names used by NetworkManager frontends.
+pub const PERMISSION_NAMES: [&str; 11] = [
+    "org.freedesktop.NetworkManager.enable-disable-network",
+    "org.freedesktop.NetworkManager.enable-disable-wifi",
+    "org.freedesktop.NetworkManager.enable-disable-wwan",
+    "org.freedesktop.NetworkManager.sleep-wake",
+    "org.freedesktop.NetworkManager.wifi-share",
+    "org.freedesktop.NetworkManager.wifi-share-open",
+    "org.freedesktop.NetworkManager.wifi-scan",
+    "org.freedesktop.NetworkManager.network-control",
+    "org.freedesktop.NetworkManager.settings-modify-system",
+    "org.freedesktop.NetworkManager.settings-modify-own",
+    "org.freedesktop.NetworkManager.wifi-connect",
+];
+
+pub async fn caller_uid(connection: &Connection, header: Header<'_>) -> fdo::Result<u32> {
+    let sender = header
+        .sender()
+        .ok_or_else(|| fdo::Error::Failed("caller has no unique bus name".to_string()))?;
+    let bus_name = BusName::try_from(sender.as_str().to_owned())
+        .map_err(|error| fdo::Error::Failed(format!("invalid caller bus name: {error}")))?;
+    let dbus = fdo::DBusProxy::new(connection).await?;
+    dbus.get_connection_unix_user(bus_name).await
+}
+
+pub async fn require_admin(
+    connection: &Connection,
+    header: Header<'_>,
+    operation: &str,
+) -> fdo::Result<()> {
+    let uid = caller_uid(connection, header).await?;
+    if is_admin_uid(uid) {
+        Ok(())
+    } else {
+        tracing::warn!(
+            uid,
+            operation,
+            "denied unprivileged NetworkManager operation"
+        );
+        Err(fdo::Error::AccessDenied(format!(
+            "{operation} requires membership in one of: {}",
+            ADMIN_GROUPS.join(", ")
+        )))
+    }
+}
+
+pub async fn permissions(
+    connection: &Connection,
+    header: Header<'_>,
+) -> fdo::Result<HashMap<String, String>> {
+    let admin = match caller_uid(connection, header).await {
+        Ok(uid) => is_admin_uid(uid),
+        Err(error) => {
+            // GetPermissions is deliberately informational. If the bus cannot
+            // resolve the uid, fail closed rather than claiming admin.
+            tracing::debug!(%error, "could not resolve GetPermissions caller uid");
+            false
+        }
+    };
+    Ok(permission_map(admin))
+}
+
+/// Operations that the daemon does not implement at all. Reporting "yes"
+/// here would make a frontend show controls that cannot work.
+const UNSUPPORTED: [&str; 4] = [
+    "org.freedesktop.NetworkManager.enable-disable-wwan",
+    "org.freedesktop.NetworkManager.wifi-share",
+    "org.freedesktop.NetworkManager.wifi-share-open",
+    "org.freedesktop.NetworkManager.settings-modify-own",
+];
+
+pub fn permission_map(admin: bool) -> HashMap<String, String> {
+    PERMISSION_NAMES
+        .iter()
+        .map(|name| {
+            let supported = !UNSUPPORTED.contains(name);
+            let allowed =
+                supported && (admin || *name == "org.freedesktop.NetworkManager.wifi-scan");
+            (
+                (*name).to_string(),
+                if allowed { "yes" } else { "no" }.to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Whether a uid is root or belongs to one of ADMIN_GROUPS.
+pub fn is_admin_uid(uid: u32) -> bool {
+    if uid == 0 {
+        return true;
+    }
+    let Some((primary_gid, groups)) = user_groups(uid) else {
+        return false;
+    };
+    let wheel = group_gid("wheel");
+    let network = group_gid("network");
+    admin_from_groups(uid, primary_gid, &groups, wheel, network)
+}
+
+/// Pure membership decision, kept separate from NSS so tests do not depend on
+/// the host's group database.
+pub fn admin_from_groups<G>(
+    uid: u32,
+    primary_gid: G,
+    groups: &[G],
+    wheel_gid: Option<G>,
+    network_gid: Option<G>,
+) -> bool
+where
+    G: Copy + PartialEq,
+{
+    if uid == 0 {
+        return true;
+    }
+    let is_member =
+        |gid: Option<G>| gid.is_some_and(|gid| primary_gid == gid || groups.contains(&gid));
+    is_member(wheel_gid) || is_member(network_gid)
+}
+
+fn group_gid(name: &str) -> Option<libc::gid_t> {
+    let name = CString::new(name).ok()?;
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    let mut group: libc::group = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::group = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getgrnam_r(
+            name.as_ptr(),
+            &mut group,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if rc == 0 && !result.is_null() {
+        Some(group.gr_gid)
+    } else {
+        None
+    }
+}
+
+fn user_groups(uid: u32) -> Option<(libc::gid_t, Vec<libc::gid_t>)> {
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getpwuid_r(
+            uid as libc::uid_t,
+            &mut passwd,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if rc != 0 || result.is_null() {
+        return None;
+    }
+    let primary_gid = passwd.pw_gid;
+    let mut groups = vec![0 as libc::gid_t; 32];
+    let mut ngroups = groups.len() as libc::c_int;
+    let rc = unsafe {
+        libc::getgrouplist(
+            passwd.pw_name,
+            passwd.pw_gid,
+            groups.as_mut_ptr(),
+            &mut ngroups,
+        )
+    };
+    if rc == -1 && ngroups > 0 {
+        groups.resize(ngroups as usize, 0);
+        let rc = unsafe {
+            libc::getgrouplist(
+                passwd.pw_name,
+                passwd.pw_gid,
+                groups.as_mut_ptr(),
+                &mut ngroups,
+            )
+        };
+        if rc == -1 {
+            return None;
+        }
+    }
+    groups.truncate(ngroups.max(0) as usize);
+    Some((primary_gid, groups))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_is_admin() {
+        assert!(admin_from_groups(0, 0, &[], None, None));
+    }
+
+    #[test]
+    fn wheel_and_network_are_admin() {
+        assert!(admin_from_groups(1001, 1001, &[0], Some(0), Some(69)));
+        assert!(admin_from_groups(1001, 69, &[], Some(0), Some(69)));
+        assert!(admin_from_groups(1001, 1001, &[0, 69], Some(0), Some(69)));
+    }
+
+    #[test]
+    fn unrelated_group_is_not_admin() {
+        assert!(!admin_from_groups(1001, 1001, &[1002], Some(0), Some(69)));
+    }
+
+    #[test]
+    fn permissions_are_truthful() {
+        let admin = permission_map(true);
+        assert_eq!(admin.len(), PERMISSION_NAMES.len());
+        assert_eq!(
+            admin["org.freedesktop.NetworkManager.network-control"],
+            "yes"
+        );
+        assert_eq!(
+            admin["org.freedesktop.NetworkManager.enable-disable-network"],
+            "yes"
+        );
+        assert_eq!(admin["org.freedesktop.NetworkManager.wifi-share"], "no");
+        assert_eq!(
+            admin["org.freedesktop.NetworkManager.settings-modify-own"],
+            "no"
+        );
+
+        let user = permission_map(false);
+        assert_eq!(user.len(), PERMISSION_NAMES.len());
+        assert_eq!(user["org.freedesktop.NetworkManager.wifi-scan"], "yes");
+        assert_eq!(user["org.freedesktop.NetworkManager.network-control"], "no");
+        assert_eq!(user["org.freedesktop.NetworkManager.wifi-connect"], "no");
+    }
+}

@@ -184,6 +184,10 @@ pub async fn create(
                     }
                 }
             }
+            tracing::debug!(
+                bus_address = ?config.bus_address,
+                "fi.w1.wpa_supplicant1 is not available; auto mode fell back to the control socket"
+            );
             tracing::info!(
                 dir = %config.wpa_ctrl_dir.display(),
                 "using wpa_supplicant control-socket backend"

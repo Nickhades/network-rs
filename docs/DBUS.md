@@ -186,10 +186,18 @@ A typical plasma-nm/GNOME scan/connect sequence maps to:
    activated.
 7. `Manager.DeactivateConnection(active)`.
 
-`GetPermissions` is present. There is no `org.freedesktop.NetworkManager.
-SecretAgent` or `AgentManager` implementation; send the PSK in the settings
-dictionary (as the XFCE plugin does). Frontends that insist on an agent for
-WPA-PSK will need that follow-up work.
+`GetPermissions` resolves the caller's Unix uid from the bus daemon. Members
+of `wheel` or `network` get `yes` for control operations; other local users get
+`no` (scan remains `yes`). Unsupported features (WWAN, Wi-Fi sharing, per-user
+settings) report `no` even for administrators, so a frontend does not show dead
+controls. The D-Bus policy grants the same groups full access and gives
+unprivileged users read-only calls.
+
+There is no `org.freedesktop.NetworkManager.SecretAgent` or `AgentManager`
+implementation; send the PSK in the settings dictionary (as the XFCE plugin
+does). Frontends that insist on an agent for WPA-PSK will need that follow-up
+work. Saved PSKs are read from the separate `keyring.json`; `GetSecrets`
+requires an administrator caller.
 
 ## Manual inspection
 

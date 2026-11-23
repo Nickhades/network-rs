@@ -28,8 +28,9 @@ The suite contains:
   parsing, SSID byte/hex/quoting helpers.
 - daemon unit tests: wpa scan/status parsing, netlink message parsing
   (synthetic and live link dump), getifaddrs/ifindex consistency, profile
-  persistence, settings round-trips, UUID path-traversal rejection, CLI
-  parsing.
+  persistence, keyring storage/migration and 0600 permissions, caller
+  permission maps (`wheel`/`network`), settings round-trips, UUID
+  path-traversal rejection, CLI parsing.
 - one plugin unit test for v4 UUID shape.
 - integration test `mvp_end_to_end` (private bus, fake datagram
   wpa_supplicant, real daemon, zbus client) in
@@ -56,11 +57,28 @@ The integration test is self-contained:
    - active connection state 2, device state 100, manager state 60;
    - `Manager.StateChanged` was emitted;
    - `Settings.ListConnections`/`GetConnection` round-trip;
+   - `GetPermissions` returns all 11 permission keys and `wifi-scan = yes`
+     (admin/read-only decisions are unit-tested separately);
    - `DeactivateConnection` returns the device to state 30 and the daemon to
      20.
 
 It does not touch the host network. It skips gracefully if no `dbus-daemon`
 binary is available.
+
+## Security policy verification
+
+`GetPermissions` is exercised by the integration test. The D-Bus policy was
+also checked on a private bus with a copy of the policy whose admin groups were
+replaced by an empty group, so the test uid used the unprivileged path:
+
+- `GetDevices` and `GetPermissions` were allowed;
+- `ActivateConnection` and `Properties.Set` failed with
+  `org.freedesktop.DBus.Error.AccessDenied`;
+- with the real `wheel` policy the same write call succeeded.
+
+This check needs a second uid/group database, so it is documented rather than
+part of `cargo test`. The daemon-side uid check is unit-tested and covers the
+case where the policy is accidentally too permissive.
 
 ## Live read-only validation (already performed)
 

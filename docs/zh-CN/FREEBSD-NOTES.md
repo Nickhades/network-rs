@@ -64,9 +64,18 @@ FreeBSD 上的安装路径：
     /usr/local/share/dbus-1/system-services/org.freedesktop.NetworkManager.service
     /usr/local/etc/rc.d/nm_freebsd
 
-策略允许 root 拥有名称，所有本地用户向该服务发送/接收消息。service 文件允许总线按需以 root
-启动守护进程。rc.d 脚本使用 <code>/usr/sbin/daemon -p</code> 后台化，并写
-<code>/var/run/nm_freebsd.pid</code>。
+策略向 root、<code>wheel</code> 和 <code>network</code> 组授予完整方法访问权；
+其他本地用户只能执行只读的 Manager/Device/AP 调用和 settings 元数据查询（不含密钥）。
+守护进程还会对每个修改类方法检查 caller uid，即使策略写错也不会静默授予写权限。
+service 文件允许总线按需以 root 启动守护进程。rc.d 脚本使用
+<code>/usr/sbin/daemon -p</code> 后台化，并写 <code>/var/run/nm_freebsd.pid</code>。
+
+桌面用户必须属于 <code>wheel</code> 或 <code>network</code> 才能获得可写界面：
+
+    pw groupmod network -m <user>
+
+keyring 位于 <code>/var/db/nm-freebsd/keyring.json</code>（0600），与 0600 的
+profile JSON 分离，但没有静态加密。
 
 FreeBSD 的 dbus rc 脚本没有 reload 命令，因此 <code>scripts/install.sh</code>
 在安装策略后通过 <code>dbus-send</code> 调用

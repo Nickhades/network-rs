@@ -22,7 +22,8 @@
 
 - <code>nm-common</code>：桌面探测、wpa 安全 flags 解析、SSID 字节/hex/转义辅助函数；
 - daemon 单元测试：wpa 扫描/状态解析、netlink 消息解析（合成消息和真实链路 dump）、
-  getifaddrs/ifindex 一致性、配置持久化、settings round-trip、UUID 路径穿越拒绝、CLI 解析；
+  getifaddrs/ifindex 一致性、配置持久化、keyring 存储/迁移与 0600 权限、caller 权限映射
+  （<code>wheel</code>/<code>network</code>）、settings round-trip、UUID 路径穿越拒绝、CLI 解析；
 - 一个插件 v4 UUID 形状测试；
 - 集成测试 <code>mvp_end_to_end</code>（私有总线、假 datagram wpa_supplicant、
   真实守护进程、zbus 客户端），位于
@@ -51,12 +52,27 @@
    - 活动连接状态 2、设备状态 100、Manager 状态 60；
    - 发出 <code>Manager.StateChanged</code>；
    - <code>Settings.ListConnections</code>/<code>GetConnection</code> round-trip；
+   - <code>GetPermissions</code> 返回全部 11 个权限键，且
+     <code>wifi-scan = yes</code>（管理员/只读判断由单元测试覆盖）；
    - <code>DeactivateConnection</code> 后设备回到 30、Manager 回到 20。
 
 它不会修改宿主机网络。没有 <code>dbus-daemon</code> 时会优雅跳过。
 
 <code>request_scan_uses_wpa_dbus_scan_done</code> 使用真实 netlink 暴露的
 <code>wlan0</code>，在私有总线上运行 mock wpa D-Bus 服务，不触碰真实关联。
+
+## 安全策略验证
+
+集成测试会调用 <code>GetPermissions</code>。此外还在私有总线上用策略副本做了检查：
+把管理员组替换为空组，让测试 uid 走非特权路径：
+
+- <code>GetDevices</code> 和 <code>GetPermissions</code> 被允许；
+- <code>ActivateConnection</code> 和 <code>Properties.Set</code> 返回
+  <code>org.freedesktop.DBus.Error.AccessDenied</code>；
+- 使用真实 <code>wheel</code> 策略时，同样的写调用成功。
+
+该检查需要第二个 uid/组数据库，因此记录在文档中，而不是放进 <code>cargo test</code>。
+守护进程侧的 uid 检查有单元测试，覆盖策略意外过宽的情况。
 
 ## 真实硬件只读验证
 

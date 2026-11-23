@@ -33,6 +33,7 @@ where
 )]
 trait Manager {
     fn get_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+    fn get_permissions(&self) -> zbus::Result<HashMap<String, String>>;
     fn add_and_activate_connection(
         &self,
         connection: SettingsMap,
@@ -329,6 +330,21 @@ async fn mvp_end_to_end() {
     let _running = daemon::start(config).await.expect("daemon starts");
     let conn = connect(&bus.address).await;
     let manager = ManagerProxy::new(&conn).await.expect("manager proxy");
+    let permissions = manager.get_permissions().await.expect("permissions");
+    assert_eq!(permissions.len(), 11, "{permissions:?}");
+    assert_eq!(
+        permissions
+            .get("org.freedesktop.NetworkManager.wifi-scan")
+            .map(String::as_str),
+        Some("yes"),
+        "{permissions:?}"
+    );
+    assert!(
+        permissions
+            .values()
+            .all(|value| value == "yes" || value == "no"),
+        "{permissions:?}"
+    );
     let manager_state = ManagerStateProxy::new(&conn)
         .await
         .expect("manager state proxy");

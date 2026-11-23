@@ -87,6 +87,16 @@ if [ "$(id -u)" -ne 0 ] && [ -z "$destdir" ] && [ "$dry" -eq 0 ]; then
     exit 1
 fi
 
+install_user=${SUDO_USER:-${DOAS_USER:-}}
+if [ -z "$destdir" ] && [ "$uninstall" -eq 0 ] && [ -n "$install_user" ] && [ "$install_user" != "root" ]; then
+    if ! id -Gn "$install_user" 2>/dev/null | tr ' ' '\n' | grep -qxE 'wheel|network'; then
+        echo "install: WARNING: $install_user is not in the wheel or network group." >&2
+        echo "install: the desktop will be read-only; grant control with:" >&2
+        echo "  pw groupmod network -m $install_user" >&2
+        echo "install: then log out and back in." >&2
+    fi
+fi
+
 if [ -z "$destdir" ] && [ "$dry" -eq 0 ] && [ "$uninstall" -eq 1 ] && [ "$yes" -eq 0 ]; then
     printf 'Uninstall nm-freebsd and remove installed system files? [y/N] '
     read answer

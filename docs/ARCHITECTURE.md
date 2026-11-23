@@ -99,7 +99,32 @@ Two implementations:
   Auto mode only selects it if the bus name is owned.
 
 `Auto` probes for the D-Bus name and otherwise chooses the control socket.
-An explicit `--backend` is never silently downgraded except in auto mode.
+An explicit `--backend` is never silently downgraded except in auto mode. At
+debug level it logs that the D-Bus name was unavailable and that auto mode
+fell back; this avoids a silent behavior change when a port build enables the
+wpa_supplicant D-Bus option.
+
+## Security and authorization
+
+Access control has three layers:
+
+1. The installed D-Bus policy grants full send access to root and members of
+   `wheel`/`network`, and only explicit read-only method calls to other local
+   users (`Properties.Get/GetAll`, Manager queries, AP discovery/scan,
+   Settings metadata without secrets).
+2. `auth.rs` resolves the caller's Unix uid through
+   `org.freedesktop.DBus.GetConnectionUnixUser` and checks root or membership
+   in those groups. Every mutating method implemented by the daemon calls
+   `require_admin`; `GetPermissions` returns the same decision to frontends.
+   `GetSecrets` is admin-only.
+3. Saved PSKs live in `/var/db/nm-freebsd/keyring.json` (0600), separate from
+   the 0600 profile JSON. Legacy plaintext `psk` fields are migrated on load.
+   The keyring is not encrypted at rest; root can read it, so this is a
+   separation/least-exposure measure, not a secret vault.
+
+There is no polkit or SecretAgent yet. A desktop user outside the admin groups
+gets a read-only UI; the README warning tells the user how to delegate through
+`network`.
 
 ## Activation
 

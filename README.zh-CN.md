@@ -4,6 +4,16 @@
 
 仓库：<https://github.com/Nickhades/network-rs>
 
+> ### 安全警告：目前不要直接安装在多用户系统上
+>
+> 这个 MVP 没有 polkit，也没有 SecretAgent。完整控制权限只授予 root 和
+> <code>wheel</code>、<code>network</code> 组成员，其他本地用户只有只读权限。
+> 桌面用户必须属于其中之一：<code>pw groupmod network -m &lt;user&gt;</code>，
+> 然后注销并重新登录。守护进程以 root 运行，可以修改整台机器的 Wi-Fi 配置。
+> 保存的 Wi-Fi 密码放在 <code>/var/db/nm-freebsd/keyring.json</code>（权限 0600），
+> 与 profile 分离，但**没有静态加密**：root 可以读取。
+> 在 polkit/SecretAgent 完成前，不要在共享、多用户或存在不可信本地用户的机器上安装。
+
 这是一个用 Rust 编写的 FreeBSD 原生 NetworkManager D-Bus 服务实现。守护进程在系统总线上拥有 <code>org.freedesktop.NetworkManager</code>，导出桌面前端已经认识的 NetworkManager 对象树。真实网络操作仍由 FreeBSD 完成：Wi-Fi 通过 wpa_supplicant，链路和事件通过 netlink，地址和 DNS 通过 getifaddrs / resolv.conf 读取。
 
 设计原则只有一条：**让现有桌面前端直接工作；除非桌面没有自己的 NetworkManager 前端，否则不要另写 UI。** plasma-nm 和 GNOME 网络面板直接连接本服务；XFCE 使用一个同样只通过 D-Bus 通信的小面板插件。
@@ -35,6 +45,8 @@
   <code>RequestScan -> Interface.Scan -> ScanDone -> BSSs -> AccessPoint</code>；
 - 对真实 <code>wlan0</code> 和系统自带 wpa_supplicant 的只读验证（真实扫描返回附近 AP，真实 IPv4 地址和 DNS 通过 IP4Config 发布）；
 - XFCE 面板插件作为 <code>libxfce4panel-2.0</code> 模块构建成功，在隔离 Xvfb 显示中的真实 <code>xfce4-panel</code> 里加载，并渲染状态按钮和网络菜单（见下方截图）；
+- Phase 1 安全加固：<code>wheel</code>/<code>network</code> D-Bus 策略、
+  按 caller uid 检查、独立的 0600 Wi-Fi keyring；
 - 一键安装、依赖检查、编译测试、只读冒烟测试和隔离桌面测试脚本。
 
 尚未在真实的 plasma-nm 或 GNOME 网络面板上做 FreeBSD 兼容测试；这是下一阶段的兼容性目标。参见[限制与路线图](#限制与路线图)。
@@ -55,6 +67,7 @@
 | 传输层 | wpa_supplicant datagram 控制 socket（FreeBSD 默认）、可选 <code>fi.w1.wpa_supplicant1</code> D-Bus 后端 |
 | 链路事件 | netlink RTM_GETLINK dump + 多播监听，getifaddrs 轮询兜底 |
 | 桌面 | KDE/GNOME/XFCE/未知桌面探测与日志；XFCE 面板插件 |
+| 安全 | <code>wheel</code>/<code>network</code> D-Bus 策略、按 caller uid 检查、真实 GetPermissions、独立 0600 keyring |
 | 打包 | D-Bus policy、activation service、rc.d 脚本、Port skeleton |
 
 接口签名和前端调用说明见 [docs/zh-CN/DBUS.md](docs/zh-CN/DBUS.md)；扫描链路见 [docs/zh-CN/SCAN-FLOW.md](docs/zh-CN/SCAN-FLOW.md)；代码审核见 [docs/zh-CN/CODE-REVIEW.md](docs/zh-CN/CODE-REVIEW.md)。双语文档索引见 [docs/zh-CN/README.md](docs/zh-CN/README.md)。
@@ -205,18 +218,29 @@ XFCE 插件是会话级的，守护进程是系统级的。插件每次请求都
 
 配置是 <code>/var/db/nm-freebsd/connections/*.json</code> 下的小型 JSON 文件
 （目录 0700，文件 0600）。只持久化守护进程实际能应用的字段：UUID、id、类型、
-SSID（字节数组）、密码、密钥管理方式、自动连接和时间戳。D-Bus settings 字典由这些字段重建。
-密钥不会被写入日志。
+SSID（字节数组）、密钥管理方式、自动连接和时间戳。密码单独存放在
+<code>/var/db/nm-freebsd/keyring.json</code>（0600），以 profile UUID 为键；
+旧 profile 中的明文 <code>psk</code> 会在启动时迁移并重写为不含密码的格式。
+D-Bus settings 字典由这些字段重建，密钥不会写入日志。
 
 ## 安全
 
-本 MVP 没有集成 polkit。安装的 D-Bus 策略允许所有本地用户调用服务，只允许 root 拥有总线名。
-守护进程以 root 运行，因此本地用户可以修改机器 Wi-Fi 配置。多用户或存在不可信本地用户的系统，
-请收紧 <code>/usr/local/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf</code>
-（文件中包含基于组的注释示例）。<code>GetPermissions</code> 对已实现操作返回
-“yes”，与当前策略保持一致。
+安装的 D-Bus 策略只向 root 和 <code>wheel</code>/<code>network</code> 组成员授予
+**完整方法访问权**；守护进程还会对每个修改类方法（激活、settings 写入、读取密钥、
+enable/sleep）独立检查 caller uid；非特权的 <code>Properties.Set</code> 由策略阻止。非特权本地用户只能读取 Manager/Device/AP 属性、
+列出不含密钥的已保存连接并发起扫描。策略和守护进程都会拒绝其
+<code>Properties.Set</code> 与 <code>GetSecrets</code>。
+<code>GetPermissions</code> 会解析 caller uid 并如实返回 <code>yes</code>/<code>no</code>
+（扫描对所有人开放，控制操作不开放）。
 
-不要把系统总线暴露给不可信机器。配置文件中包含 Wi-Fi 密码，应把
+目前仍然没有 polkit 和 SecretAgent。不属于 <code>wheel</code> 或 <code>network</code>
+的桌面用户会得到只读界面；授权方式：
+
+    pw groupmod network -m <user>
+
+然后注销并重新登录。多用户或存在不可信本地用户的系统，请先不要安装本 MVP，
+等待 polkit/SecretAgent 阶段。keyring 是独立的 0600 文件，但**没有静态加密**，
+root 可以读取。不要把系统总线暴露给不可信机器。应把
 <code>/var/db/nm-freebsd</code> 视为敏感目录。
 
 ## 限制与路线图
