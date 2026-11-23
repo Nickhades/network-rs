@@ -126,7 +126,7 @@ Port 安装不能安全地直接改 /etc，因此 <code>pkg-message</code> 会�
 <code>.so</code>；应安装到临时名再 rename，然后重启 <code>xfce4-panel</code>。
 
 插件的 D-Bus worker 与守护进程生命周期独立。每次请求都新建连接，所以守护进程重启后，
-下一次 5 秒刷新或用户操作会自动恢复。
+下一次信号监听重连（2 秒）或 30 秒兜底刷新会自动恢复。
 
 ## Port
 

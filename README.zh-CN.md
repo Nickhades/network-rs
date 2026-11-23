@@ -39,8 +39,9 @@
 ## 版本历史
 
 - **v0.1.0** — 初始 NetworkManager 兼容 MVP；作为历史存档标签保留。
-- **v0.2.0 / main** — Phase 1 安全加固（策略分组、caller uid、keyring）与
-  Phase 2 DHCP（dhclient/dhcpcd、exit hook、有线激活）。
+- **v0.2.0** — Phase 1 安全加固与 Phase 2 DHCP；历史存档。
+- **v0.2.1 / main** — Phase 3 信号回归，以及信号驱动的 XFCE 面板刷新
+  （30 秒兜底）。
 
 ## 当前状态
 
@@ -290,7 +291,8 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
 - 守护进程启动前已经连上的 Wi-Fi 会显示为 <code>CONNECTED_SITE</code>，在通过守护进程执行一次
   激活前没有 <code>ActiveConnection</code> 对象。
 - 只有非空扫描结果不再包含某个 AP 时才移除 AP；空扫描结果保留旧列表以避免界面闪烁。
-- XFCE 插件每 5 秒轮询一次，不订阅信号。
+- XFCE 插件由 NetworkManager 标准信号驱动，保留 30 秒兜底轮询；
+  守护进程重启后会重连信号监听。
 - 真实 plasma-nm、GNOME 面板兼容测试仍待完成。
 
 ## 仓库结构

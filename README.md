@@ -52,8 +52,9 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 - **v0.1.0** — initial NetworkManager compatibility MVP; kept as a historical
   archive tag.
-- **v0.2.0 / main** — Phase 1 security hardening (policy groups, caller uid,
-  keyring) and Phase 2 DHCP (dhclient/dhcpcd, exit hooks, wired activation).
+- **v0.2.0** — Phase 1 security hardening and Phase 2 DHCP; historical.
+- **v0.2.1 / main** — Phase 3 signal regression plus signal-driven XFCE panel
+  refresh (30-second fallback).
 
 ## Status
 
@@ -349,7 +350,9 @@ Deliberately out of scope for this MVP:
   performed through the daemon.
 - Access points are only removed when a non-empty scan no longer contains them;
   an empty scan result preserves the previous list to avoid flicker.
-- The XFCE plugin polls every 5 seconds and does not subscribe to signals.
+- The XFCE plugin is signal-driven (standard NetworkManager signals) with a
+  30-second fallback poll; it reconnects its signal listener after daemon
+  restarts.
 - Live plasma-nm and GNOME panel testing is still pending.
 
 ## Repository map

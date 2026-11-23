@@ -143,8 +143,9 @@ do not overwrite the `.so` in place while it is loaded; install to a temporary
 name and rename, then restart `xfce4-panel`.
 
 The panel plugin's D-Bus worker is independent of the daemon lifetime. Every
-request opens a fresh connection, so a daemon restart is recovered on the next
-five-second refresh or user action.
+request opens a fresh connection, so a daemon restart is recovered by the
+signal listener (reconnect every two seconds), the 30-second fallback refresh,
+or a user action.
 
 ## Port
 

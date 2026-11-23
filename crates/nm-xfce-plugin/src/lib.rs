@@ -3,7 +3,8 @@
 //! The panel loads this cdylib in-process. All D-Bus work happens on a
 //! dedicated worker thread; GTK is only touched on the main thread. A daemon
 //! restart is therefore invisible to the plugin: every request reconnects to
-//! the system bus and the next periodic refresh recovers automatically.
+//! the system bus, a signal listener reconnects, and a 30-second fallback poll
+//! recovers automatically.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -12,13 +13,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use nm_common::ssid::ssid_to_string;
 use xfce_panel::glib;
 use xfce_panel::gtk;
 use xfce_panel::gtk::prelude::*;
 use xfce_panel::{PanelPlugin, Plugin};
 use zbus::connection::Builder as ConnectionBuilder;
-use zbus::{Connection, OwnedObjectPath, OwnedVariant, Variant};
+use zbus::message::Type as MessageType;
+use zbus::{Connection, MatchRule, MessageStream, OwnedObjectPath, OwnedVariant, Variant};
 
 #[zbus::proxy(
     interface = "org.freedesktop.NetworkManager",
@@ -507,6 +510,7 @@ struct Worker {
 impl Worker {
     fn spawn(ui_tx: Sender<UiEvent>) -> Self {
         let (tx, rx) = mpsc::channel::<Request>();
+        let worker_tx = tx.clone();
         let _ = std::thread::Builder::new()
             .name("nm-xfce-dbus".to_string())
             .spawn(move || {
@@ -517,10 +521,51 @@ impl Worker {
                     let _ = ui_tx.send(UiEvent::Error("failed to start async runtime".into()));
                     return;
                 };
-                runtime.block_on(worker_loop(rx, ui_tx));
+                runtime.block_on(async move {
+                    let signal_tx = worker_tx.clone();
+                    tokio::spawn(signal_loop(signal_tx));
+                    worker_loop(rx, ui_tx).await;
+                });
             });
         Self { tx }
     }
+}
+
+/// Listen for NetworkManager signals and enqueue a coalesced refresh.
+///
+/// The panel still has a slow fallback poll, but normal state changes
+/// (connect/disconnect, AP strength, IP4Config) arrive as D-Bus signals.
+async fn signal_loop(tx: Sender<Request>) {
+    loop {
+        if let Err(error) = listen_signals(&tx).await {
+            eprintln!("nm-freebsd-xfce: signal listener: {error}");
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+async fn listen_signals(tx: &Sender<Request>) -> Result<(), String> {
+    let connection = ConnectionBuilder::system()
+        .build()
+        .await
+        .map_err(|error| error.to_string())?;
+    // Match by path namespace rather than a well-known sender: signals are
+    // sent by the daemon's unique bus name, and this also survives a daemon
+    // restart with a new unique name.
+    let rule = MatchRule::builder()
+        .msg_type(MessageType::Signal)
+        .path_namespace("/org/freedesktop/NetworkManager")
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut stream = MessageStream::for_match_rule(rule, &connection, None)
+        .await
+        .map_err(|error| error.to_string())?;
+    while stream.next().await.is_some() {
+        let _ = tx.send(Request::Refresh);
+        // Collapse a burst of AP PropertiesChanged signals into one snapshot.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Ok(())
 }
 
 async fn worker_loop(rx: Receiver<Request>, ui_tx: Sender<UiEvent>) {
@@ -695,7 +740,8 @@ impl PanelPlugin for NetworkManagerPlugin {
 
         {
             let tx = ui.tx.clone();
-            let timer = glib::timeout_add_local(Duration::from_secs(5), move || {
+            // Fallback only; normal updates are signal-driven and immediate.
+            let timer = glib::timeout_add_local(Duration::from_secs(30), move || {
                 let _ = tx.send(Request::Refresh);
                 glib::ControlFlow::Continue
             });

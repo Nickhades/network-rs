@@ -212,6 +212,6 @@ owns all zbus work; the GTK main thread only consumes `UiEvent` values via a
 150 ms timeout source.
 
 Each request opens a fresh system-bus connection. If the daemon restarts, the
-next five-second refresh or menu action reconnects; the plugin has no sticky
-connection to break. On plugin removal, timer sources and the worker shutdown
+next signal-listener reconnect (every two seconds) or the 30-second fallback
+refresh recovers; the plugin has no sticky connection to break. On plugin removal, timer sources and the worker shutdown
 request are released.

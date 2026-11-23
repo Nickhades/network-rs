@@ -243,7 +243,8 @@ policy、activation service、rc script 和插件路径。
 - **没有 AP**：检查 <code>wpa_cli -i wlan0 scan_results</code>；
   守护进程使用相同数据。新扫描可能需要几秒。
 - **插件显示 “Wi-Fi unavailable”**：守护进程未运行、总线策略阻止了该用户，
-  或名称被其他进程拥有。悬停查看错误；插件每 5 秒重试。
+  或名称被其他进程拥有。悬停查看错误；插件信号监听每 2 秒重连，
+  并保留 30 秒兜底轮询。
 
 ## CI 说明
 

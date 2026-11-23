@@ -286,7 +286,8 @@ binary, policy, activation service, rc script and plugin paths.
   data. A new scan may take several seconds.
 - **Plugin says "Wi-Fi unavailable"**: the daemon is not running, the bus policy
   blocks the user, or the name is owned by something else. Hover for the error
-  text; the plugin retries every five seconds.
+  text; the plugin's signal listener reconnects every two seconds, with a
+  30-second fallback poll.
 
 ## CI notes
 
