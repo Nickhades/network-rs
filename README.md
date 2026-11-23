@@ -57,9 +57,11 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 - **v0.2.0** — Phase 1 security hardening and Phase 2 DHCP; historical.
 - **v0.2.1** — Phase 3 signal regression plus signal-driven XFCE panel;
   historical.
-- **v0.2.2 / main** — NM contract fixes (Device.Disconnect,
+- **v0.2.2** — NM contract fixes (Device.Disconnect,
   AddAndActivateConnection2), ActiveConnection adoption, activation
-  serialization/profile dedupe, and GNOME/XFCE frontend fixes.
+  serialization/profile dedupe, and GNOME/XFCE frontend fixes; historical.
+- **v0.2.3 / main** — thin `nm-freebsd-cli` over the same NM D-Bus
+  contract, plus install/Port integration.
 
 ## Status
 
@@ -247,6 +249,23 @@ state plus Rescan/Disconnect. Logs are in
 `artifacts/desktop-test/logs/`. The test needs `Xvfb`, `xfce4-panel`,
 `xfce4-screenshooter`, XTest headers (`pkg install libXtst`) and a real
 `wlan0` for device enumeration.
+
+## CLI
+
+`nm-freebsd-cli` is a thin client over the same NetworkManager D-Bus contract;
+it does not open wpa_supplicant sockets or run DHCP itself.
+
+```sh
+nm-freebsd-cli status
+nm-freebsd-cli devices
+nm-freebsd-cli connections
+nm-freebsd-cli wifi list --scan
+nm-freebsd-cli wifi connect "Cafe WiFi" --password 'secret'
+nm-freebsd-cli disconnect
+```
+
+The CLI falls back to `AddAndActivateConnection` if an older daemon does not
+expose `AddAndActivateConnection2`.
 
 ## GNOME Shell extension
 
@@ -456,6 +475,7 @@ tools/                     fake wpa server, port crate-list generator
 artifacts/desktop-test/    panel/menu screenshots and logs
 docs/                      English architecture, D-Bus, scan flow, FreeBSD, testing, review
 docs/zh-CN/                Chinese mirrors of the same documents
+crates/nm-freebsd-cli/     thin NM D-Bus CLI
 gnome-extension/           raw D-Bus GNOME Shell extension
 install-oneclick.sh        prebuilt root installer (no Rust build)
 uninstall-oneclick.sh      remove the installed files

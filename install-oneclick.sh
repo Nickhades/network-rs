@@ -17,6 +17,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 if [ ! -x target/release/nm-freebsd-daemon ] || \
+   [ ! -x target/release/nm-freebsd-cli ] || \
    [ ! -x target/release/nm-notify-dhcp ] || \
    [ ! -f target/release/libnm_freebsd_xfce.so ]; then
     echo "install-oneclick: prebuilt release artifacts are missing." >&2

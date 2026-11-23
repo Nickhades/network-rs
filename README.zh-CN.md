@@ -41,9 +41,11 @@
 - **v0.1.0** — 初始 NetworkManager 兼容 MVP；作为历史存档标签保留。
 - **v0.2.0** — Phase 1 安全加固与 Phase 2 DHCP；历史存档。
 - **v0.2.1** — Phase 3 信号回归与信号驱动 XFCE 面板；历史存档。
-- **v0.2.2 / main** — NM 契约修复（Device.Disconnect、
+- **v0.2.2** — NM 契约修复（Device.Disconnect、
   AddAndActivateConnection2）、ActiveConnection 接管、激活串行化/profile
-  去重，以及 GNOME/XFCE 前端修复。
+  去重，以及 GNOME/XFCE 前端修复；历史存档。
+- **v0.2.3 / main** — 同一 NM D-Bus 契约上的瘦客户端
+  <code>nm-freebsd-cli</code>，以及安装/Port 集成。
 
 ## 当前状态
 
@@ -198,6 +200,21 @@ dhclient hook 文件备份为 <code>*.nm-freebsd.bak</code>，安装
 <code>Xvfb</code>、<code>xfce4-panel</code>、<code>xfce4-screenshooter</code>、
 XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
 <code>wlan0</code> 用于设备枚举。
+
+## CLI
+
+<code>nm-freebsd-cli</code> 是同一套 NetworkManager D-Bus 契约上的瘦客户端，
+不直接打开 wpa_supplicant socket，也不自己运行 DHCP。
+
+    nm-freebsd-cli status
+    nm-freebsd-cli devices
+    nm-freebsd-cli connections
+    nm-freebsd-cli wifi list --scan
+    nm-freebsd-cli wifi connect "云涧" --password '...'
+    nm-freebsd-cli disconnect
+
+如果 daemon 较旧、没有 <code>AddAndActivateConnection2</code>，CLI 会回退到
+<code>AddAndActivateConnection</code>。
 
 ## GNOME Shell 扩展
 
@@ -370,6 +387,7 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
       tests/integration.rs     私有总线 + 假 wpa/客户端端到端测试
       tests/wpa_dbus_mock.rs   mock fi.w1.wpa_supplicant1 扫描链路测试
     crates/nm-dhcp-notify/     dhclient-exit-hooks -> Dhcp.Notify 桥
+    crates/nm-freebsd-cli/     瘦 NM D-Bus CLI
     crates/nm-xfce-plugin/     XFCE 面板插件（cdylib）
     scripts/                   安装、依赖、编译测试、冒烟、桌面测试
     packaging/freebsd/         policy、activation service、rc.d、Port skeleton

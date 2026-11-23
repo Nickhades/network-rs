@@ -3,13 +3,14 @@ members = [
     "crates/nm-common",
     "crates/nm-freebsd-daemon",
     "crates/nm-dhcp-notify",
+    "crates/nm-freebsd-cli",
     "crates/nm-xfce-plugin",
 ]
 default-members = ["crates/nm-freebsd-daemon"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 rust-version = "1.95"
 license = "BSD-2-Clause"

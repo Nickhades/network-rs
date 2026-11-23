@@ -1,0 +1,20 @@
+[package]
+name = "nm-freebsd-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Thin NetworkManager D-Bus CLI for nm-freebsd"
+
+[[bin]]
+name = "nm-freebsd-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+nm-common.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+zbus.workspace = true

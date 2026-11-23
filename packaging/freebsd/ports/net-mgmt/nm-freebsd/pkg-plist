@@ -1,3 +1,4 @@
+bin/nm-freebsd-cli
 bin/nm-freebsd-daemon
 libexec/nm-freebsd-dhcp-hook
 libexec/nm-notify-dhcp

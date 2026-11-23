@@ -206,6 +206,7 @@ if [ "$uninstall" -eq 1 ]; then
         run service nm_freebsd stop >/dev/null 2>&1 || true
     fi
     remove_file "$target_prefix/bin/nm-freebsd-daemon"
+    remove_file "$target_prefix/bin/nm-freebsd-cli"
     remove_file "$target_prefix/libexec/nm-notify-dhcp"
     remove_file "$target_prefix/libexec/nm-freebsd-dhcp-hook"
     remove_file "$target_prefix/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf"
@@ -284,6 +285,11 @@ if [ "$build" -eq 1 ]; then
         echo "install: DHCP notifier build failed" >&2
         exit 1
     fi
+    echo "building release CLI..."
+    if ! run "$cargo_cmd" build --release --locked -p nm-freebsd-cli; then
+        echo "install: CLI build failed" >&2
+        exit 1
+    fi
     if [ "$plugin" -eq 1 ]; then
         echo "building release XFCE plugin..."
         if ! run "$cargo_cmd" build --release --locked -p nm-xfce-plugin; then
@@ -301,6 +307,11 @@ fi
 notify_bin=$root/target/release/nm-notify-dhcp
 if [ ! -x "$notify_bin" ]; then
     echo "install: missing $notify_bin (build with --no-build after cargo build)" >&2
+    exit 1
+fi
+cli_bin=$root/target/release/nm-freebsd-cli
+if [ ! -x "$cli_bin" ]; then
+    echo "install: missing $cli_bin (build with --no-build after cargo build)" >&2
     exit 1
 fi
 hook_src=$root/packaging/freebsd/libexec/nm-freebsd-dhcp-hook.in
@@ -335,6 +346,7 @@ backup "$target_prefix/share/dbus-1/system-services/org.freedesktop.NetworkManag
 backup "$target_prefix/etc/rc.d/nm_freebsd"
 
 run install -m 755 "$daemon_bin" "$target_prefix/bin/nm-freebsd-daemon"
+run install -m 755 "$cli_bin" "$target_prefix/bin/nm-freebsd-cli"
 run install -m 755 "$notify_bin" "$target_prefix/libexec/nm-notify-dhcp"
 tmp_hook=$(mktemp)
 sed "s|%%PREFIX%%|$prefix|g" "$hook_src" > "$tmp_hook"
@@ -387,6 +399,7 @@ fi
 
 echo "install: OK"
 echo "  daemon: $target_prefix/bin/nm-freebsd-daemon"
+echo "  cli:    $target_prefix/bin/nm-freebsd-cli"
 if [ "$plugin" -eq 1 ]; then
     echo "  plugin: $target_prefix/lib/xfce4/panel/plugins/libnm_freebsd_xfce.so"
 fi

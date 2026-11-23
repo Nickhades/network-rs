@@ -1,5 +1,5 @@
 PORTNAME=	nm-freebsd
-DISTVERSION=	0.2.2
+DISTVERSION=	0.2.3
 CATEGORIES=	net-mgmt
 
 MAINTAINER=	zxy@example.com
@@ -49,6 +49,9 @@ do-build:
 	@cd ${WRKSRC} && ${SETENV} ${MAKE_ENV} ${CARGO_ENV} \
 		${CARGO} build --release --locked --offline -p nm-dhcp-notify \
 		--target-dir ${CARGO_BUILD_TARGET_DIR}
+	@cd ${WRKSRC} && ${SETENV} ${MAKE_ENV} ${CARGO_ENV} \
+		${CARGO} build --release --locked --offline -p nm-freebsd-cli \
+		--target-dir ${CARGO_BUILD_TARGET_DIR}
 .if ${PORT_OPTIONS:MXFCE}
 	@cd ${WRKSRC} && ${SETENV} ${MAKE_ENV} ${CARGO_ENV} \
 		${CARGO} build --release --locked --offline -p nm-xfce-plugin \
@@ -57,6 +60,8 @@ do-build:
 
 do-install:
 	${INSTALL_PROGRAM} ${CARGO_BUILD_TARGET_DIR}/release/nm-freebsd-daemon \
+		${STAGEDIR}${PREFIX}/bin/
+	${INSTALL_PROGRAM} ${CARGO_BUILD_TARGET_DIR}/release/nm-freebsd-cli \
 		${STAGEDIR}${PREFIX}/bin/
 	${MKDIR} ${STAGEDIR}${PREFIX}/libexec
 	${INSTALL_PROGRAM} ${CARGO_BUILD_TARGET_DIR}/release/nm-notify-dhcp \

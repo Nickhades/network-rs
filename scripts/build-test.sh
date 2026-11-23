@@ -100,7 +100,7 @@ else
 fi
 
 printf '\n== artifacts ==\n'
-ls -lh target/release/nm-freebsd-daemon
+ls -lh target/release/nm-freebsd-daemon target/release/nm-freebsd-cli
 if [ "$with_plugin" -eq 1 ]; then
     ls -lh target/release/libnm_freebsd_xfce.so
     find target/release/build -name nm_freebsd_xfce.desktop -print | head -1
