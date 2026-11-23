@@ -1,5 +1,7 @@
 # Wi-Fi scan flow
 
+**Languages:** [English](SCAN-FLOW.md) | [简体中文](zh-CN/SCAN-FLOW.md)
+
 The upper and lower interfaces are intentionally different layers:
 
 ```

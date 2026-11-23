@@ -1,5 +1,7 @@
 # FreeBSD implementation notes
 
+**Languages:** [English](FREEBSD-NOTES.md) | [简体中文](zh-CN/FREEBSD-NOTES.md)
+
 ## wpa_supplicant has no D-Bus on stock FreeBSD
 
 The architecture sketch assumed `fi.w1.wpa_supplicant1`. The base-system

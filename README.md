@@ -1,5 +1,7 @@
 # nm-freebsd
 
+**Languages:** [English](README.md) | [简体中文](README.zh-CN.md)
+
 Repository: <https://github.com/Nickhades/network-rs>
 
 A native FreeBSD implementation of the NetworkManager D-Bus service, written in
@@ -77,7 +79,7 @@ See [docs/DBUS.md](docs/DBUS.md) for signatures and frontend notes,
 [docs/SCAN-FLOW.md](docs/SCAN-FLOW.md) for the exact RequestScan ->
 Interface.Scan -> ScanDone -> BSSs chain, and
 [docs/CODE-REVIEW.md](docs/CODE-REVIEW.md) for the review findings and accepted
-risks.
+risks. A bilingual documentation index is at [docs/README.md](docs/README.md).
 
 ## Important FreeBSD findings
 
@@ -299,7 +301,8 @@ scripts/                   install, deps, build-test, smoke-test, desktop-test
 packaging/freebsd/         policy, activation service, rc.d, port skeleton
 tools/                     fake wpa server, port crate-list generator
 artifacts/desktop-test/    panel/menu screenshots and logs
-docs/                      architecture, D-Bus, scan flow, FreeBSD, testing, review
+docs/                      English architecture, D-Bus, scan flow, FreeBSD, testing, review
+docs/zh-CN/                Chinese mirrors of the same documents
 Makefile                   convenience targets for the scripts
 ```
 

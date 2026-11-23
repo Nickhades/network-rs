@@ -1,5 +1,7 @@
 # FreeBSD packaging
 
+**Languages:** [English](README.md) | [简体中文](README.zh-CN.md)
+
 This directory contains the deployment artifacts and a port skeleton for
 nm-freebsd.
 

@@ -1,5 +1,7 @@
 # Testing
 
+**Languages:** [English](TESTING.md) | [简体中文](zh-CN/TESTING.md)
+
 ## Automated
 
 The convenience entry points are:

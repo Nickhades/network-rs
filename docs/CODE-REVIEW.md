@@ -1,5 +1,7 @@
 # Code review
 
+**Languages:** [English](CODE-REVIEW.md) | [简体中文](zh-CN/CODE-REVIEW.md)
+
 ## 中文摘要
 
 本轮审核覆盖 Rust 守护进程/插件、安装与测试脚本、FreeBSD 打包。重点修复了

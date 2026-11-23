@@ -1,5 +1,7 @@
 # Architecture
 
+**Languages:** [English](ARCHITECTURE.md) | [简体中文](zh-CN/ARCHITECTURE.md)
+
 ## Layers
 
 1. **Desktop dispatch** (`crates/nm-common/src/desktop.rs`,
