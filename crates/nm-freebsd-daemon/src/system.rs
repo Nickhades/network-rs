@@ -116,6 +116,37 @@ pub fn hostname() -> String {
     String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
+/// Default IPv4 router for an interface, using the stable `route -n get
+/// default` output. DHCP exit hooks normally provide the router; this is the
+/// fallback for reused system dhclients whose next hook may be hours away.
+pub fn default_gateway(ifname: &str) -> Option<String> {
+    let output = std::process::Command::new("/sbin/route")
+        .args(["-n", "get", "default"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_default_route(&String::from_utf8_lossy(&output.stdout), ifname)
+}
+
+fn parse_default_route(output: &str, ifname: &str) -> Option<String> {
+    let mut gateway = None;
+    let mut interface = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("gateway:") {
+            gateway = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("interface:") {
+            interface = Some(value.trim().to_string());
+        }
+    }
+    if interface.as_deref() != Some(ifname) {
+        return None;
+    }
+    gateway.filter(|value| value.parse::<std::net::Ipv4Addr>().is_ok())
+}
+
 /// Wi-Fi interfaces to manage. Explicit configuration always wins; otherwise
 /// FreeBSD's conventionally named wlan* clones are used.
 pub fn discover_wifi_interfaces(configured: &[String]) -> Vec<String> {
@@ -153,5 +184,15 @@ mod tests {
     #[test]
     fn hostname_is_not_empty() {
         assert!(!hostname().is_empty());
+    }
+
+    #[test]
+    fn parses_default_route() {
+        let output = "route to: 0.0.0.0\n gateway: 192.168.2.1\n interface: wlan0\n";
+        assert_eq!(
+            parse_default_route(output, "wlan0").as_deref(),
+            Some("192.168.2.1")
+        );
+        assert_eq!(parse_default_route(output, "em0"), None);
     }
 }

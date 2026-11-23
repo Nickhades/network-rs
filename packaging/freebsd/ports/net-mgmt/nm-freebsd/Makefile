@@ -1,5 +1,5 @@
 PORTNAME=	nm-freebsd
-DISTVERSION=	0.1.0
+DISTVERSION=	0.2.0
 CATEGORIES=	net-mgmt
 
 MAINTAINER=	zxy@example.com
@@ -44,7 +44,10 @@ PLIST_SUB+=	XFCE="@comment "
 
 do-build:
 	@cd ${WRKSRC} && ${SETENV} ${MAKE_ENV} ${CARGO_ENV} \
-		${CARGO} build --release --locked --offline \
+		${CARGO} build --release --locked --offline -p nm-freebsd-daemon \
+		--target-dir ${CARGO_BUILD_TARGET_DIR}
+	@cd ${WRKSRC} && ${SETENV} ${MAKE_ENV} ${CARGO_ENV} \
+		${CARGO} build --release --locked --offline -p nm-dhcp-notify \
 		--target-dir ${CARGO_BUILD_TARGET_DIR}
 .if ${PORT_OPTIONS:MXFCE}
 	@cd ${WRKSRC} && ${SETENV} ${MAKE_ENV} ${CARGO_ENV} \
@@ -55,6 +58,14 @@ do-build:
 do-install:
 	${INSTALL_PROGRAM} ${CARGO_BUILD_TARGET_DIR}/release/nm-freebsd-daemon \
 		${STAGEDIR}${PREFIX}/bin/
+	${MKDIR} ${STAGEDIR}${PREFIX}/libexec
+	${INSTALL_PROGRAM} ${CARGO_BUILD_TARGET_DIR}/release/nm-notify-dhcp \
+		${STAGEDIR}${PREFIX}/libexec/nm-notify-dhcp
+	${SED} 's|%%PREFIX%%|${PREFIX}|g' \
+		${WRKSRC}/packaging/freebsd/libexec/nm-freebsd-dhcp-hook.in \
+		> ${WRKDIR}/nm-freebsd-dhcp-hook
+	${INSTALL_SCRIPT} ${WRKDIR}/nm-freebsd-dhcp-hook \
+		${STAGEDIR}${PREFIX}/libexec/nm-freebsd-dhcp-hook
 	${MKDIR} ${STAGEDIR}${PREFIX}/etc/dbus-1/system.d
 	${INSTALL_DATA} ${FILESDIR}/org.freedesktop.NetworkManager.conf \
 		${STAGEDIR}${PREFIX}/etc/dbus-1/system.d/

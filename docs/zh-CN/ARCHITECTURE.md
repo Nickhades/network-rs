@@ -102,6 +102,33 @@ dispatcher 已经持有该接口的读锁，而处理函数又等待同一个对
 目前仍没有 polkit 或 SecretAgent。不属于管理员组的桌面用户会得到只读界面；
 README 警告说明了如何通过 <code>network</code> 组授权。
 
+## DHCP 与 IP 配置
+
+L2 关联完成后（有线则立即）设备进入 <code>IP_CONFIG</code>，活动连接保持
+<code>ACTIVATING</code>。管理器：
+
+- 如果 <code>/var/run/dhclient/dhclient.&lt;ifname&gt;.pid</code> 指向存活进程，
+  复用 rc.conf 启动的 dhclient；
+- 否则默认启动受管的前台 <code>dhclient -d &lt;ifname&gt;</code>；
+- 也可以选择 <code>dhcpcd</code>；该路径在本 MVP 中是实验性的，没有专门的租约 hook；
+- 等待 DHCP 事件或地址变化，然后发布 IP4Config，并把设备/活动连接置为
+  <code>ACTIVATED</code>。
+
+<code>/etc/dhclient-exit-hooks</code> source
+<code>/usr/local/libexec/nm-freebsd-dhcp-hook</code>，后者运行
+<code>nm-notify-dhcp</code>。这个小型二进制读取 dhclient 环境变量，并调用
+<code>/org/freedesktop/NetworkManager/Dhcp</code> 上的内部方法
+<code>org.freedesktop.NetworkManager.Dhcp.Notify</code>。守护进程取
+<code>new_routers</code> 第一项作为 Gateway，<code>new_subnet_mask</code>
+作为前缀，<code>new_domain_name_servers</code> 作为 DNS。
+NetworkManager 没有 <code>IP4_CONFIGURED</code> 这个 ActiveConnection 状态；
+标准设备状态 <code>IP_CONFIG</code> 表示该阶段，ActiveConnection 在有地址前
+保持 <code>ACTIVATING</code>。
+
+超时（默认 30 秒）后设备保持 <code>IP_CONFIG</code>，活动连接被移除，
+Manager 降级到 <code>CONNECTED_SITE</code>。EXPIRE/RELEASE 会立即清除租约。
+停用时只停止受管客户端；复用的系统 dhclient 保持运行。
+
 ## 激活
 
 <code>AddAndActivateConnection</code> 和 <code>ActivateConnection</code> 走同一核心路径：

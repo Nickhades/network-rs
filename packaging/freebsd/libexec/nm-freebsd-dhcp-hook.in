@@ -1,0 +1,10 @@
+#!/bin/sh
+# Sourced by /etc/dhclient-exit-hooks.
+#
+# dhclient-script exports reason, interface and new_* lease variables. Keep
+# this bridge extremely small: a missing daemon or binary must not make
+# dhclient-script fail.
+_nm_notify="%%PREFIX%%/libexec/nm-notify-dhcp"
+if [ -x "$_nm_notify" ]; then
+    "$_nm_notify" >/dev/null 2>&1 || true
+fi

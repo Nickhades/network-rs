@@ -108,6 +108,7 @@ fi
 
 target_prefix=$destdir$prefix
 target_state=$destdir/var/db/nm-freebsd
+target_hooks=$destdir/etc/dhclient-exit-hooks
 
 run() {
     if [ "$dry" -eq 1 ]; then
@@ -142,6 +143,29 @@ remove_file() {
     if [ -e "$file" ] || [ -L "$file" ]; then
         run rm -f "$file"
     fi
+}
+
+install_dhclient_hook() {
+    hook=$1
+    if [ "$dry" -eq 1 ]; then
+        echo "+ install DHCP exit hook in $hook"
+        return 0
+    fi
+    mkdir -p "$(dirname "$hook")"
+    backup "$hook"
+    if [ ! -e "$hook" ]; then
+        printf '#!/bin/sh\n' > "$hook"
+    fi
+    if ! grep -q 'nm-freebsd-dhcp-hook' "$hook"; then
+        {
+            printf '\n# nm-freebsd DHCP lease notifications\n'
+            printf 'if [ -r "%s/libexec/nm-freebsd-dhcp-hook" ]; then\n' "$prefix"
+            printf '    . "%s/libexec/nm-freebsd-dhcp-hook"\n' "$prefix"
+            printf 'fi\n'
+        } >> "$hook"
+        echo "install: added DHCP hook to $hook"
+    fi
+    chmod 755 "$hook"
 }
 
 find_cargo() {
@@ -182,18 +206,28 @@ if [ "$uninstall" -eq 1 ]; then
         run service nm_freebsd stop >/dev/null 2>&1 || true
     fi
     remove_file "$target_prefix/bin/nm-freebsd-daemon"
+    remove_file "$target_prefix/libexec/nm-notify-dhcp"
+    remove_file "$target_prefix/libexec/nm-freebsd-dhcp-hook"
     remove_file "$target_prefix/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf"
     remove_file "$target_prefix/share/dbus-1/system-services/org.freedesktop.NetworkManager.service"
     remove_file "$target_prefix/etc/rc.d/nm_freebsd"
     remove_file "$target_prefix/lib/xfce4/panel/plugins/libnm_freebsd_xfce.so"
     remove_file "$target_prefix/share/xfce4/panel/plugins/nm_freebsd_xfce.desktop"
     if [ -z "$destdir" ]; then
+        if [ -e "$target_hooks.nm-freebsd.bak" ]; then
+            restore "$target_hooks"
+        elif [ -f "$target_hooks" ] && grep -q 'nm-freebsd-dhcp-hook' "$target_hooks"; then
+            run rm -f "$target_hooks"
+        fi
         restore "$target_prefix/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf"
         restore "$target_prefix/share/dbus-1/system-services/org.freedesktop.NetworkManager.service"
         restore "$target_prefix/etc/rc.d/nm_freebsd"
         if command -v sysrc >/dev/null 2>&1; then
             run sysrc -x nm_freebsd_enable >/dev/null 2>&1 || true
         fi
+    fi
+    if [ -n "$destdir" ]; then
+        remove_file "$target_hooks"
     fi
     if [ "$purge" -eq 1 ]; then
         run rm -rf "$target_state"
@@ -245,6 +279,11 @@ if [ "$build" -eq 1 ]; then
         echo "install: daemon build failed" >&2
         exit 1
     fi
+    echo "building release DHCP hook notifier..."
+    if ! run "$cargo_cmd" build --release --locked -p nm-dhcp-notify; then
+        echo "install: DHCP notifier build failed" >&2
+        exit 1
+    fi
     if [ "$plugin" -eq 1 ]; then
         echo "building release XFCE plugin..."
         if ! run "$cargo_cmd" build --release --locked -p nm-xfce-plugin; then
@@ -257,6 +296,16 @@ fi
 daemon_bin=$root/target/release/nm-freebsd-daemon
 if [ ! -x "$daemon_bin" ]; then
     echo "install: missing $daemon_bin" >&2
+    exit 1
+fi
+notify_bin=$root/target/release/nm-notify-dhcp
+if [ ! -x "$notify_bin" ]; then
+    echo "install: missing $notify_bin (build with --no-build after cargo build)" >&2
+    exit 1
+fi
+hook_src=$root/packaging/freebsd/libexec/nm-freebsd-dhcp-hook.in
+if [ ! -f "$hook_src" ]; then
+    echo "install: missing $hook_src" >&2
     exit 1
 fi
 plugin_so=$root/target/release/libnm_freebsd_xfce.so
@@ -275,6 +324,7 @@ fi
 
 echo "installing to $target_prefix"
 run install -d -m 755 "$target_prefix/bin"
+run install -d -m 755 "$target_prefix/libexec"
 run install -d -m 755 "$target_prefix/etc/dbus-1/system.d"
 run install -d -m 755 "$target_prefix/share/dbus-1/system-services"
 run install -d -m 755 "$target_prefix/etc/rc.d"
@@ -285,8 +335,14 @@ backup "$target_prefix/share/dbus-1/system-services/org.freedesktop.NetworkManag
 backup "$target_prefix/etc/rc.d/nm_freebsd"
 
 run install -m 755 "$daemon_bin" "$target_prefix/bin/nm-freebsd-daemon"
+run install -m 755 "$notify_bin" "$target_prefix/libexec/nm-notify-dhcp"
+tmp_hook=$(mktemp)
+sed "s|%%PREFIX%%|$prefix|g" "$hook_src" > "$tmp_hook"
+run install -m 644 "$tmp_hook" "$target_prefix/libexec/nm-freebsd-dhcp-hook"
+rm -f "$tmp_hook"
 run install -m 644 "$root/packaging/freebsd/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf" \
     "$target_prefix/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf"
+install_dhclient_hook "$target_hooks"
 
 tmp_service=$(mktemp)
 sed "s|%%PREFIX%%|$prefix|g" \

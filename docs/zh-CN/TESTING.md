@@ -23,7 +23,8 @@
 - <code>nm-common</code>：桌面探测、wpa 安全 flags 解析、SSID 字节/hex/转义辅助函数；
 - daemon 单元测试：wpa 扫描/状态解析、netlink 消息解析（合成消息和真实链路 dump）、
   getifaddrs/ifindex 一致性、配置持久化、keyring 存储/迁移与 0600 权限、caller 权限映射
-  （<code>wheel</code>/<code>network</code>）、settings round-trip、UUID 路径穿越拒绝、CLI 解析；
+  （<code>wheel</code>/<code>network</code>）、DHCP 后端/进程生命周期、netmask 转前缀、
+  settings round-trip、UUID 路径穿越拒绝、CLI 解析；
 - 一个插件 v4 UUID 形状测试；
 - 集成测试 <code>mvp_end_to_end</code>（私有总线、假 datagram wpa_supplicant、
   真实守护进程、zbus 客户端），位于
@@ -54,12 +55,25 @@
    - <code>Settings.ListConnections</code>/<code>GetConnection</code> round-trip；
    - <code>GetPermissions</code> 返回全部 11 个权限键，且
      <code>wifi-scan = yes</code>（管理员/只读判断由单元测试覆盖）；
-   - <code>DeactivateConnection</code> 后设备回到 30、Manager 回到 20。
+   - <code>DeactivateConnection</code> 后设备回到 30、Manager 回到 20；
+   - 模拟 <code>Dhcp.Notify</code> BOUND 事件，发布地址 10.99.0.2/24 和
+     Gateway 10.99.0.1（hook 数据路径）。
 
 它不会修改宿主机网络。没有 <code>dbus-daemon</code> 时会优雅跳过。
 
 <code>request_scan_uses_wpa_dbus_scan_done</code> 使用真实 netlink 暴露的
 <code>wlan0</code>，在私有总线上运行 mock wpa D-Bus 服务，不触碰真实关联。
+
+## DHCP 验证
+
+集成测试通过内部 <code>Dhcp.Notify</code> 推送模拟 BOUND，检查 IP4Config
+Gateway/AddressData。daemon 单元测试覆盖 netmask 转换、后端选择、禁用后端，
+以及假 <code>dhclient</code> 脚本（启动、受管 PID、停止）。
+真实 <code>dhclient -d</code> 和 root 所有的 exit hook 需要 root 且可能影响主机链路，
+因此仍属于手动/真实环境测试项。
+
+staged 安装测试检查 <code>/etc/dhclient-exit-hooks</code> 收到带保护的 source 行，
+并确认 notifier/hook 二进制安装到 <code>/usr/local/libexec</code>。
 
 ## 安全策略验证
 
@@ -179,8 +193,9 @@ FreeBSD 15.1 上的结果：
 3. 用已知 SSID/PSK 调用 <code>AddAndActivateConnection</code>。
 4. 确认 <code>wpa_cli -i &lt;if&gt; status</code> 到达 <code>COMPLETED</code>。
 5. 确认 <code>Device.State = 100</code>、活动连接状态 2、Manager 状态 60。
-6. 如果该接口有 DHCP 客户端，确认 <code>IP4Config.AddressData</code> 有值；
-   守护进程本身不启动 DHCP。
+6. 确认 <code>IP4Config.AddressData</code>、<code>Gateway</code> 和 DNS 有值。
+   守护进程会启动/复用 <code>dhclient</code>，除非 <code>--dhcp-backend</code>
+   另有选择；必须使用备用接口并准备恢复路径。
 7. <code>DeactivateConnection</code>；确认回到 <code>DISCONNECTED</code>，
    且 wpa_supplicant 不再把该网络作为 current。
 
@@ -211,8 +226,10 @@ policy、activation service、rc script 和插件路径。
   或用户属于 <code>wheel</code> 组。Port 的 rc 脚本以 root 运行。
 - **扫描返回 <code>FAIL-BUSY</code>**：wpa_supplicant 正在扫描。
   <code>RequestScan</code> 把这种情况视为成功。
-- **已连接但没有 IP**：没有 DHCP 客户端时的预期行为；参见
-  [FREEBSD-NOTES.md](FREEBSD-NOTES.md) 和 README 的限制。
+- **已连接但没有 IP / CONNECTED_SITE**：检查所选 DHCP 后端、
+  <code>/var/run/dhclient/dhclient.&lt;if&gt;.pid</code>、
+  <code>/etc/dhclient-exit-hooks</code> 和租约超时；参见
+  [FREEBSD-NOTES.md](FREEBSD-NOTES.md)。
 - **没有 AP**：检查 <code>wpa_cli -i wlan0 scan_results</code>；
   守护进程使用相同数据。新扫描可能需要几秒。
 - **插件显示 “Wi-Fi unavailable”**：守护进程未运行、总线策略阻止了该用户，

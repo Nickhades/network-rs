@@ -36,6 +36,12 @@
         D-Bus 或 datagram 控制接口      链路 dump / 事件
                                          getifaddrs + resolv.conf
 
+## 版本历史
+
+- **v0.1.0** — 初始 NetworkManager 兼容 MVP；作为历史存档标签保留。
+- **v0.2.0 / main** — Phase 1 安全加固（策略分组、caller uid、keyring）与
+  Phase 2 DHCP（dhclient/dhcpcd、exit hook、有线激活）。
+
 ## 当前状态
 
 在 FreeBSD 15.1-RELEASE (amd64) 上已验证的可工作 MVP：
@@ -47,6 +53,9 @@
 - XFCE 面板插件作为 <code>libxfce4panel-2.0</code> 模块构建成功，在隔离 Xvfb 显示中的真实 <code>xfce4-panel</code> 里加载，并渲染状态按钮和网络菜单（见下方截图）；
 - Phase 1 安全加固：<code>wheel</code>/<code>network</code> D-Bus 策略、
   按 caller uid 检查、独立的 0600 Wi-Fi keyring；
+- Phase 2 DHCP：默认 base <code>dhclient</code>、可选 <code>dhcpcd</code>、
+  复用系统 dhclient、exit-hook 租约事件、IP4Config Gateway、有线 DHCP
+  （进程/hook 路径在测试中模拟；真实 root DHCP 测试仍为手动）；
 - 一键安装、依赖检查、编译测试、只读冒烟测试和隔离桌面测试脚本。
 
 尚未在真实的 plasma-nm 或 GNOME 网络面板上做 FreeBSD 兼容测试；这是下一阶段的兼容性目标。参见[限制与路线图](#限制与路线图)。
@@ -62,8 +71,10 @@
 | Settings | 连接列表、读取、添加、更新、删除、重新加载、NewConnection/ConnectionRemoved |
 | Settings.Connection | 读取设置/密钥、更新、未保存更新、删除、Updated/Removed |
 | Connection.Active | 状态、default、设备、IP4Config、ID |
-| IP4Config | 地址数据、DNS 服务器、DNS 数据（只读） |
+| IP4Config | 地址数据、Gateway、DNS 服务器、DNS 数据（只读） |
 | Wi-Fi 后端 | 开放网络、WPA2-PSK、WPA3-SAE、扫描、状态、连接、断开 |
+| DHCP | base <code>dhclient</code>（默认）、可选 <code>dhcpcd</code>、复用系统客户端、exit-hook 事件、有线和 Wi-Fi |
+| 有线激活 | <code>ActivateConnection</code> DHCP 分支、链路/地址状态和 IP4Config |
 | 传输层 | wpa_supplicant datagram 控制 socket（FreeBSD 默认）、可选 <code>fi.w1.wpa_supplicant1</code> D-Bus 后端 |
 | 链路事件 | netlink RTM_GETLINK dump + 多播监听，getifaddrs 轮询兜底 |
 | 桌面 | KDE/GNOME/XFCE/未知桌面探测与日志；XFCE 面板插件 |
@@ -91,6 +102,11 @@
 4. **FreeBSD 14+ 可以使用 netlink。** <code>crates/nm-freebsd-daemon/src/netlink.rs</code>
    直接处理 FreeBSD 的线格式，包括与 Linux 不同、以长度字节开头的
    <code>sockaddr_nl</code>。netlink 不可用时通过 getifaddrs 轮询保持可用。
+5. **dhclient PID 路径不是 <code>/var/run/dhclient.*.pid</code>。** FreeBSD 使用
+   <code>/var/run/dhclient/dhclient.&lt;ifname&gt;.pid</code>；守护进程检查该文件，
+   复用 rc.conf 已启动的 dhclient，避免重复 fork。租约事件来自
+   <code>/etc/dhclient-exit-hooks</code>，由 <code>dhclient-script</code> 在
+   BOUND/RENEW/EXPIRE 后 source。
 
 ## 一键安装与测试
 
@@ -109,8 +125,9 @@
     sudo scripts/install.sh --destdir /tmp/stage --no-start --no-smoke
     scripts/install.sh --uninstall --yes     # 停止并移除已安装文件
 
-安装器使用 <code>packaging/freebsd</code> 中的文件，会把已有的 policy、service 和 rc 文件备份为
-<code>*.nm-freebsd.bak</code>，启用 rc 服务，通过
+安装器使用 <code>packaging/freebsd</code> 中的文件，会把已有的 policy、service、rc 和
+dhclient hook 文件备份为 <code>*.nm-freebsd.bak</code>，安装
+<code>nm-notify-dhcp</code> 并追加 DHCP exit-hook source 行，启用 rc 服务，通过
 <code>org.freedesktop.DBus.ReloadConfig</code> 应用策略，然后运行冒烟测试。
 如果 Rust 来自当前用户的 rustup，安装器会为 root 构建推导
 <code>CARGO_HOME</code>/<code>RUSTUP_HOME</code>；开发时最好由用户自己构建并使用
@@ -145,10 +162,12 @@ XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
 - 运行时需要 D-Bus 系统总线和 wpa_supplicant。
 
     cargo build --release -p nm-freebsd-daemon
+    cargo build --release -p nm-dhcp-notify
     cargo build --release -p nm-xfce-plugin   # 可选，需要 XFCE 开发库
     cargo test --workspace
 
-守护进程二进制是 <code>target/release/nm-freebsd-daemon</code>；插件是
+守护进程二进制是 <code>target/release/nm-freebsd-daemon</code>；DHCP hook 桥是
+<code>target/release/nm-notify-dhcp</code>；插件是
 <code>target/release/libnm_freebsd_xfce.so</code>，生成的 desktop 文件位于
 <code>target/release/build/nm-xfce-plugin-*/out/nm_freebsd_xfce.desktop</code>。
 
@@ -170,6 +189,10 @@ XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
 生产环境安装 <code>packaging/freebsd</code> 中的文件：
 
     install -m 755 target/release/nm-freebsd-daemon /usr/local/bin/
+    install -d /usr/local/libexec
+    install -m 755 target/release/nm-notify-dhcp /usr/local/libexec/
+    sed 's|%%PREFIX%%|/usr/local|g' packaging/freebsd/libexec/nm-freebsd-dhcp-hook.in \
+      > /usr/local/libexec/nm-freebsd-dhcp-hook
     install -d /usr/local/etc/dbus-1/system.d /usr/local/share/dbus-1/system-services
     install -m 644 packaging/freebsd/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf \
       /usr/local/etc/dbus-1/system.d/
@@ -183,6 +206,11 @@ XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
     sysrc nm_freebsd_enable=YES
     service nm_freebsd start
 
+一键安装器还会安装 <code>nm-notify-dhcp</code> 并追加 DHCP source 行。
+手工安装时需要自行添加：
+
+    printf '\n. /usr/local/libexec/nm-freebsd-dhcp-hook\n' >> /etc/dhclient-exit-hooks
+
 Port skeleton 位于 <code>packaging/freebsd/ports/net-mgmt/nm-freebsd</code>，参见
 [packaging/freebsd/README.zh-CN.md](packaging/freebsd/README.zh-CN.md)。
 Port 的 <code>cargo-crates.mk</code> 由
@@ -191,6 +219,8 @@ Port 的 <code>cargo-crates.mk</code> 由
 ### 守护进程选项
 
     --backend auto|wpa-ctrl|wpa-dbus   wpa_supplicant 传输方式（默认 auto）
+    --dhcp-backend auto|dhclient|dhcpcd  DHCP 客户端（默认 auto，优先 base dhclient）
+    --dhcp-timeout SECONDS             等待租约后降级到 CONNECTED_SITE 的秒数（默认 30）
     --wpa-ctrl-dir PATH                默认 /var/run/wpa_supplicant
     --state-dir PATH                   配置存储，默认 /var/db/nm-freebsd
     --wifi-interface NAME              可重复；未指定时自动探测 wlan*
@@ -247,12 +277,11 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
 
 本 MVP 明确不包含：
 
-- **守护进程不执行 DHCP/地址配置，也不配置路由。** 关联成功后只发布 FreeBSD 已有的地址
-  （例如来自 <code>ifconfig_wlan0="WPA DHCP"</code>）。没有 DHCP 客户端的系统会关联成功但没有
-  IPv4 地址。Gateway 目前为空。
-- 未实现有线激活；以太网设备可见，会显示链路状态和已有的 IPv4/IP4Config，但对它们调用
-  <code>ActivateConnection</code> 会返回 <code>NotSupported</code>。
-- 不支持 IPv6（<code>IP6Config</code> 为 <code>/</code>）、DHCP option 对象、SecretAgent、
+- DHCP 通过 <code>dhclient</code>（默认）或可选 <code>dhcpcd</code> 实现。
+  没有系统实例时启动受管客户端，否则复用现有实例。exit hooks 上报
+  BOUND/RENEW/REBIND/EXPIRE。租约超时（默认 30 秒）后设备保持 IP_CONFIG，
+  Manager 降级到 CONNECTED_SITE，而不是谎报可用 IP。
+- 不支持 IPv6（<code>IP6Config</code> 为 <code>/</code>）、DHCPv6、DHCP option 对象、SecretAgent、
   polkit、VPN、企业级 802.1X、WEP、隐藏网络 UI。
 - 不自动激活已保存配置。wpa_supplicant 自己配置的网络仍可能关联，守护进程会报告该状态。
 - 守护进程启动前已经连上的 Wi-Fi 会显示为 <code>CONNECTED_SITE</code>，在通过守护进程执行一次
@@ -264,9 +293,10 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
 ## 仓库结构
 
     crates/nm-common/          常量、桌面探测、SSID/安全解析辅助
-    crates/nm-freebsd-daemon/  守护进程、D-Bus 对象、wpa_ctrl/wpa_dbus、netlink
-      tests/integration.rs     私有总线 + 假 wpa_supplicant 端到端测试
+    crates/nm-freebsd-daemon/  守护进程、D-Bus 对象、wpa_ctrl/wpa_dbus、netlink、DHCP
+      tests/integration.rs     私有总线 + 假 wpa/客户端端到端测试
       tests/wpa_dbus_mock.rs   mock fi.w1.wpa_supplicant1 扫描链路测试
+    crates/nm-dhcp-notify/     dhclient-exit-hooks -> Dhcp.Notify 桥
     crates/nm-xfce-plugin/     XFCE 面板插件（cdylib）
     scripts/                   安装、依赖、编译测试、冒烟、桌面测试
     packaging/freebsd/         policy、activation service、rc.d、Port skeleton

@@ -172,6 +172,25 @@ SAE 使用 <code>key-mgmt = 'sae'</code>。
 Wi-Fi 激活获得地址时、有线链路已有 IPv4 地址时，或观察到外部已建立的链路有地址时，
 会创建该对象。对象读取实时设备状态，因此 DHCP 租约变化无需重建对象即可反映。
 
+## 内部 DHCP 通知（非标准）
+
+dhclient exit hook 调用一个内部对象，不对应 NetworkManager API：
+
+    path:      /org/freedesktop/NetworkManager/Dhcp
+    interface: org.freedesktop.NetworkManager.Dhcp
+    method:    Notify(s ifname, s reason, a{ss} data)
+
+<code>reason</code> 为 BOUND、RENEW、REBIND、EXPIRE、RELEASE、FAIL 或 TIMEOUT。
+数据字典由 <code>nm-notify-dhcp</code> 从 dhclient 导出的
+<code>new_ip_address</code>、<code>new_subnet_mask</code>、<code>new_routers</code>、
+<code>new_domain_name_servers</code> 构建。方法要求管理员 caller；
+D-Bus 策略不允许非特权用户调用。守护进程取第一个 router 作为 IP4Config Gateway，
+第一个 DNS 地址作为 DNS。
+
+ActiveConnection 状态在有地址前保持 ACTIVATING；NetworkManager 没有
+“IP4_CONFIGURED” 这个 ActiveConnection 状态，该窗口对应 Device 状态
+IP_CONFIG。
+
 ## 前端典型调用路径
 
 plasma-nm/GNOME 的一次扫描/连接通常映射为：

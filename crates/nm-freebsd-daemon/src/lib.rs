@@ -9,6 +9,7 @@ pub mod config;
 pub mod core;
 pub mod daemon;
 pub mod dbus;
+pub mod dhcp;
 pub mod model;
 pub mod netlink;
 pub mod settings;

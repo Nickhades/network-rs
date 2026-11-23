@@ -48,7 +48,8 @@ FreeBSD 的线格式与 Linux 类似但不完全相同。尤其是
 
 如果监听 socket 无法创建，守护进程回退到 5 秒一次的 getifaddrs 轮询。
 接口状态、MAC、MTU 和 IPv4 地址仍然可用。IPv4 地址和 DNS 服务器从 getifaddrs 和
-<code>/etc/resolv.conf</code> 读取；守护进程不运行 DHCP 客户端。
+<code>/etc/resolv.conf</code> 读取；DHCP 本身由 dhclient/dhcpcd 后端和下面的
+exit-hook 桥处理。
 
 ## D-Bus 策略与激活
 
@@ -84,6 +85,26 @@ FreeBSD 的 dbus rc 脚本没有 reload 命令，因此 <code>scripts/install.sh
 <code>service dbus restart</code> 兜底提示。
 
 守护进程需要 root：wpa_supplicant socket 和接口操作都需要权限。本 MVP 没有特权分离辅助进程。
+
+## DHCP：FreeBSD 的真实路径
+
+base 客户端是 <code>/sbin/dhclient</code>。PID 文件是
+<code>/var/run/dhclient/dhclient.&lt;ifname&gt;.pid</code>
+（目录 + 每接口文件），不是 <code>/var/run/dhclient.&lt;ifname&gt;.pid</code>。
+守护进程读取该文件，复用 rc.conf 已启动的实例，而不是再启动一个客户端。
+
+受管客户端以 <code>dhclient -d &lt;ifname&gt;</code>（前台）启动，便于守护进程监控生命周期。
+停用时只向受管进程发信号；复用的系统客户端保持运行。
+
+<code>dhclient-script</code> 在 BOUND、RENEW、REBIND、EXPIRE 等事件后 source
+<code>/etc/dhclient-exit-hooks</code>。一键安装器追加一条带保护的 source 行，
+指向 <code>/usr/local/libexec/nm-freebsd-dhcp-hook</code>；hook 运行
+<code>nm-notify-dhcp</code>，把环境转发到内部 <code>Dhcp.Notify</code> D-Bus 方法。
+Port 安装不能安全地直接改 /etc，因此 <code>pkg-message</code> 会打印需要手工添加的行。
+
+可选 <code>dhcpcd</code> 后端启动 <code>dhcpcd -4 -B</code>，在本 MVP 中是实验性的：
+没有 dhcpcd 专用租约 hook，因此地址更新依赖普通地址轮询，Gateway 可能为空。
+默认 <code>dhclient</code> 路径不需要新增 Port 依赖。
 
 ## XFCE 面板插件 ABI
 

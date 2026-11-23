@@ -1,6 +1,7 @@
 //! Daemon configuration.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
 use nm_common::DesktopEnvironment;
@@ -19,6 +20,16 @@ pub enum BackendKind {
 pub enum BusKind {
     System,
     Session,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DhcpChoice {
+    /// Use /sbin/dhclient when present, otherwise dhcpcd.
+    Auto,
+    /// Use the FreeBSD base-system dhclient.
+    Dhclient,
+    /// Use a dhcpcd installation.
+    Dhcpcd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -52,6 +63,14 @@ pub struct Args {
     /// Which wpa_supplicant transport to use.
     #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
     pub backend: BackendKind,
+
+    /// DHCP client to run after association. Auto prefers base dhclient.
+    #[arg(long, value_enum, default_value_t = DhcpChoice::Auto)]
+    pub dhcp_backend: DhcpChoice,
+
+    /// Seconds to wait for a DHCP address before degrading to CONNECTED_SITE.
+    #[arg(long, default_value_t = 30)]
+    pub dhcp_timeout: u64,
 
     /// Directory holding wpa_supplicant per-interface control sockets.
     #[arg(long, default_value = "/var/run/wpa_supplicant")]
@@ -90,9 +109,32 @@ pub struct Args {
     pub log_level: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DhcpBackendKind {
+    Auto,
+    Dhclient,
+    Dhcpcd,
+    /// Used by tests and by --dhcp-backend in a future explicit "off" mode.
+    Disabled,
+}
+
+impl From<DhcpChoice> for DhcpBackendKind {
+    fn from(value: DhcpChoice) -> Self {
+        match value {
+            DhcpChoice::Auto => Self::Auto,
+            DhcpChoice::Dhclient => Self::Dhclient,
+            DhcpChoice::Dhcpcd => Self::Dhcpcd,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub backend: BackendKind,
+    pub dhcp_backend: DhcpBackendKind,
+    pub dhcp_timeout: Duration,
+    pub dhclient_path: PathBuf,
+    pub dhcpcd_path: PathBuf,
     pub wpa_ctrl_dir: PathBuf,
     pub state_dir: PathBuf,
     pub wifi_interfaces: Vec<String>,
@@ -108,6 +150,10 @@ impl Config {
     pub fn from_args(args: Args) -> Self {
         Self {
             backend: args.backend,
+            dhcp_backend: args.dhcp_backend.into(),
+            dhcp_timeout: Duration::from_secs(args.dhcp_timeout.max(1)),
+            dhclient_path: PathBuf::from("/sbin/dhclient"),
+            dhcpcd_path: PathBuf::from("dhcpcd"),
             wpa_ctrl_dir: args.wpa_ctrl_dir,
             state_dir: args.state_dir,
             wifi_interfaces: args.wifi_interfaces,
@@ -124,6 +170,10 @@ impl Config {
     pub fn for_tests(wpa_ctrl_dir: PathBuf, state_dir: PathBuf) -> Self {
         Self {
             backend: BackendKind::WpaCtrl,
+            dhcp_backend: DhcpBackendKind::Disabled,
+            dhcp_timeout: Duration::from_secs(5),
+            dhclient_path: PathBuf::from("/sbin/dhclient"),
+            dhcpcd_path: PathBuf::from("dhcpcd"),
             wpa_ctrl_dir,
             state_dir,
             wifi_interfaces: vec!["wlan0".to_string()],
@@ -140,6 +190,21 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_dhcp_backend() {
+        let args = Args::try_parse_from([
+            "nm-freebsd-daemon",
+            "--dhcp-backend",
+            "dhcpcd",
+            "--dhcp-timeout",
+            "7",
+        ])
+        .unwrap();
+        let cfg = Config::from_args(args);
+        assert_eq!(cfg.dhcp_backend, DhcpBackendKind::Dhcpcd);
+        assert_eq!(cfg.dhcp_timeout, Duration::from_secs(7));
+    }
 
     #[test]
     fn parses_backend_names() {

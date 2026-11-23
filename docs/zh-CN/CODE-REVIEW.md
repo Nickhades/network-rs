@@ -9,15 +9,17 @@
 本轮覆盖守护进程/插件、安装与测试脚本、FreeBSD 打包。重点修复了
 wpa_supplicant 控制接口 datagram 类型、D-Bus 方法内自死锁、非 ASCII SSID 的 wpa 转义、
 配置文件 UUID 路径穿越、插件读取 <code>/dev/urandom</code> 阻塞、激活/断开竞态、
-首次激活 IP4Config 缺失和有线接口状态等问题。剩余主要产品级缺口是 DHCP/地址路由配置、
-SecretAgent/polkit、IPv6、有线激活，以及尚未在真实 plasma-nm/GNOME 面板上验证。
-自动测试、私有总线冒烟、真实 wpa 只读扫描和隔离 XFCE 面板渲染均已通过。
+首次激活 IP4Config 缺失和有线接口状态等问题。Phase 2 已补上
+dhclient/dhcpcd DHCP、exit-hook 租约事件、Gateway/DNS、有线激活和
+CONNECTED_SITE 超时语义。剩余主要缺口是 SecretAgent/polkit、IPv6、dhcpcd 专用
+lease hook，以及尚未在真实 plasma-nm/GNOME 面板上验证。自动测试、私有总线冒烟、
+真实 wpa 只读扫描和隔离 XFCE 面板渲染均已通过。
 
 ## 审核时验证
 
 - <code>cargo fmt --all --check</code>
 - <code>cargo clippy --workspace --all-targets -- -D warnings</code>
-- <code>cargo test --workspace</code>：16 个 common + 25 个 daemon + 1 个 plugin
+- <code>cargo test --workspace</code>：16 个 common + 33 个 daemon + 1 个 plugin
   + 2 个端到端集成测试
 - daemon 和 XFCE 插件 release 构建
 - 插件 <code>dlopen</code> + <code>xfce_panel_module_init</code> 符号检查
@@ -48,6 +50,9 @@ SecretAgent/polkit、IPv6、有线激活，以及尚未在真实 plasma-nm/GNOME
 | 低 | wpa 后端 | <code>SAVE_CONFIG</code> 可能悄悄改写 <code>/etc/wpa_supplicant.conf</code>。 | 移除；配置保存在守护进程状态目录。 |
 | 低 | wpa D-Bus | 后端只轮询 BSS，没有订阅真实 <code>ScanDone</code> 信号。 | 监听 <code>Interface.ScanDone</code> 后刷新 BSS；mock 集成测试证明链路。 |
 | 低 | 后端选择 | auto 回退到控制 socket 时没有说明原因，debug 级别也看不到。 | debug 日志明确记录 <code>fi.w1.wpa_supplicant1</code> 不可用、auto 使用控制 socket。 |
+| 高 | IP 配置 | 关联完成时即使没有 IPv4 地址，设备也会被标记为 ACTIVATED，活动连接也标记为 ACTIVATED。 | DHCP 期间设备进入 IP_CONFIG，活动连接保持 ACTIVATING；有地址后才完成；超时降级 CONNECTED_SITE。 |
+| 高 | DHCP 集成 | 有线 ActivateConnection 返回 NotSupported，且没有租约事件路径。 | 有线使用同一 DHCP 分支；dhclient exit hook 调用内部 Dhcp.Notify；更新 IP4Config Gateway/DNS。 |
+| 中 | FreeBSD 路径 | 最初假设 <code>/var/run/dhclient.*.pid</code>；FreeBSD 实际使用 <code>/var/run/dhclient/dhclient.&lt;ifname&gt;.pid</code>。 | 使用真实路径，复用存活的系统 dhclient，避免重复 fork。 |
 | 低 | 脚本 | 冒烟测试 GVariant 数字解析把类型宽度也算进去（<code>&lt;uint32 50&gt;</code> 变成 3250），选项循环会跳过值。 | 取最后一个字段、去前导零，改用 <code>while</code> 参数循环。 |
 | 低 | 脚本 | 隔离桌面测试把 D-Bus socket 放在含非 ASCII 字节的路径下，D-Bus 拒绝。 | 运行时状态放 <code>/tmp</code>，截图/日志复制回仓库。 |
 | 低 | 打包 | Port Makefile 在 <code>bsd.port.options.mk</code> 之前使用 <code>PORT_OPTIONS</code>，并假设 target 目录。 | 加入 <code>bsd.port.options.mk</code> 和显式 <code>CARGO_BUILD_TARGET_DIR</code>。 |
@@ -55,11 +60,14 @@ SecretAgent/polkit、IPv6、有线激活，以及尚未在真实 plasma-nm/GNOME
 
 ## 接受的风险 / 待办
 
-- **不执行 DHCP 或地址/路由配置。** 只发布 FreeBSD 已有地址；没有 DHCP 客户端的系统关联后没有 IPv4。
-- **有线激活是只读的。** 以太网链路和地址可见，但 <code>ActivateConnection</code> 返回
-  <code>NotSupported</code>。
-- 不支持 IPv6、DHCP option 对象、SecretAgent、polkit、VPN、802.1X、WEP、隐藏网络 UI、
-  已保存配置自动激活。
+- DHCP 已实现：默认 base <code>dhclient</code>，可选 <code>dhcpcd</code>。
+  守护进程复用 rc.conf 已启动的 dhclient，否则启动受管前台客户端。
+  超时后设备保持 IP_CONFIG，Manager 降级到 CONNECTED_SITE，而不是谎报地址。
+- <code>dhcpcd</code> 路径是实验性的：本 MVP 没有 dhcpcd 专用租约 hook，
+  地址更新依赖普通地址轮询，Gateway 可能为空。没有执行真实 root 所有的
+  dhclient/hook 测试；staged 安装和模拟 <code>Dhcp.Notify</code> 路径已测试。
+- 不支持 IPv6、DHCPv6、DHCP option 对象、SecretAgent、polkit、VPN、802.1X、WEP、
+  隐藏网络 UI、已保存配置自动激活。
 - 可选 wpa_supplicant D-Bus 后端可编译，但未在真实
   <code>fi.w1.wpa_supplicant1</code> 服务上运行（stock FreeBSD 没有）；mock 测试覆盖协议链路。
 - 尚未测试真实 plasma-nm 和 GNOME 面板；XFCE 已在隔离的真实面板中测试。

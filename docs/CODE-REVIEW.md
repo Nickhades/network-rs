@@ -7,10 +7,11 @@
 本轮审核覆盖 Rust 守护进程/插件、安装与测试脚本、FreeBSD 打包。重点修复了
 wpa_supplicant 控制接口的 datagram 类型、D-Bus 方法内自死锁、非 ASCII SSID
 的 wpa 转义、配置文件 UUID 路径穿越、插件读取 `/dev/urandom` 阻塞、激活/断开
-竞态、首次激活 IP4Config 缺失和有线接口状态等问题。剩余的主要产品级缺口是
-DHCP/地址路由配置、SecretAgent/polkit、IPv6、有线激活，以及尚未在真实
-plasma-nm/GNOME 面板上验证。自动测试、私有总线冒烟测试、真实 wpa 只读扫描和
-隔离 XFCE 面板渲染均已通过。
+竞态、首次激活 IP4Config 缺失和有线接口状态等问题。Phase 2 已补上
+dhclient/dhcpcd DHCP、exit-hook 租约事件、Gateway/DNS、有线激活和
+CONNECTED_SITE 超时语义。剩余主要缺口是 SecretAgent/polkit、IPv6、dhcpcd 专用
+lease hook，以及尚未在真实 plasma-nm/GNOME 面板上验证。自动测试、私有总线冒烟、
+真实 wpa 只读扫描和隔离 XFCE 面板渲染均已通过。
 
 Scope: the Rust workspace, shell install/test tooling and FreeBSD packaging in
 this repository. This is a working review, not a formal security audit.
@@ -19,7 +20,7 @@ this repository. This is a working review, not a formal security audit.
 
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace`: 16 common + 25 daemon + 1 plugin + 2 end-to-end
+- `cargo test --workspace`: 16 common + 33 daemon + 1 plugin + 2 end-to-end
   integration tests (control socket and mock wpa D-Bus)
 - release build of daemon and XFCE plugin
 - plugin `dlopen` + `xfce_panel_module_init` symbol check
@@ -53,18 +54,24 @@ this repository. This is a working review, not a formal security audit.
 | Low | Wi-Fi | wpa_supplicant prints non-ASCII SSIDs as literal `\xNN` sequences; AP `Ssid` contained backslash ASCII instead of the real bytes. | `unescape_wpa` in `nm-common`, used by scan/status parsing, with tests; live scan confirmed raw UTF-8 bytes. |
 | Low | wpa D-Bus | The backend only polled BSSs; it did not subscribe to the real `ScanDone` signal. | `Interface.ScanDone` listener triggers BSS refresh; mock integration test proves the chain. |
 | Low | Backend selection | Auto mode fell back to the control socket without saying why, even at debug level. | Debug log now states that `fi.w1.wpa_supplicant1` was unavailable and auto mode used the control socket. |
+| High | IP configuration | Association completion marked the device and ActiveConnection ACTIVATED even when no IPv4 address existed. | Device enters IP_CONFIG while DHCP runs; ActiveConnection stays ACTIVATING until an address is published; timeout degrades to CONNECTED_SITE. |
+| High | DHCP integration | Wired ActivateConnection returned NotSupported, and there was no lease event path. | Wired uses the same DHCP branch; dhclient exit hooks call the internal Dhcp.Notify interface; IP4Config Gateway/DNS are updated. |
+| Medium | FreeBSD paths | The implementation initially assumed `/var/run/dhclient.*.pid`; FreeBSD uses `/var/run/dhclient/dhclient.<ifname>.pid`. | Use the real path and reuse a live system dhclient instead of forking a duplicate. |
 | Low | Scripts | Smoke-test GVariant numeric parsing included the type width (`<uint32 50>` became 3250), and its option loop skipped values. | Parse the last field, strip leading zeroes, and use a `while` argument loop. |
 | Low | Scripts | The isolated desktop test put its D-Bus socket under a path containing non-ASCII bytes, which D-Bus rejects. | Runtime state moved to `/tmp`; screenshots/logs copied back to the repository. |
 
 ## Accepted risks / open work
 
-- **No DHCP or address/route configuration.** Association is performed, but the
-  daemon only publishes addresses that FreeBSD already has. A system without an
-  existing DHCP client will have no IPv4 address after connecting.
-- **Wired activation is read-only.** Ethernet links and addresses are exposed,
-  but `ActivateConnection` returns `NotSupported`.
-- No IPv6, DHCP option objects, SecretAgent, polkit, VPN, 802.1X, WEP, hidden
-  network UI or automatic saved-profile activation.
+- DHCP is implemented with base `dhclient` by default and optional
+  `dhcpcd`. The daemon reuses a running rc.conf dhclient and otherwise starts
+  a managed foreground client. A timeout leaves the device in IP_CONFIG and
+  degrades the manager to CONNECTED_SITE instead of claiming an address.
+- The `dhcpcd` path is experimental: there is no dhcpcd-specific lease hook in
+  this MVP, so address updates rely on the normal address poll and Gateway may
+  be empty. No live root-owned dhclient/hook test was performed; the staged
+  install and simulated `Dhcp.Notify` path are tested.
+- No IPv6, DHCPv6, DHCP option objects, SecretAgent, polkit, VPN, 802.1X, WEP,
+  hidden network UI or automatic saved-profile activation.
 - The optional wpa_supplicant D-Bus backend compiles but was not exercised
   against a live `fi.w1.wpa_supplicant1` service (stock FreeBSD does not have
   one).

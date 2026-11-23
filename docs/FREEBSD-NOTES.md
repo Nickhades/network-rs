@@ -55,7 +55,8 @@ does not depend on Linux-only crates.
 If the monitor socket cannot be created, the daemon falls back to a five-second
 getifaddrs poll. Interface state, MAC, MTU and IPv4 addresses are still
 available. IPv4 addresses and DNS servers are read with getifaddrs and
-`/etc/resolv.conf`; the daemon does not run a DHCP client.
+`/etc/resolv.conf`; DHCP itself is handled by the dhclient/dhcpcd backend and
+the exit-hook bridge described below.
 
 ## D-Bus policy and activation
 
@@ -96,6 +97,29 @@ the installer prints the `service dbus restart` fallback.
 
 The daemon needs root for the wpa_supplicant socket and for interface changes.
 There is no privilege-separated helper in this MVP.
+
+## DHCP: real FreeBSD paths
+
+The base client is `/sbin/dhclient`. Its PID file is
+`/var/run/dhclient/dhclient.<ifname>.pid` (a directory plus per-interface
+file), not `/var/run/dhclient.<ifname>.pid`. The daemon reads that file and
+reuses a running rc.conf-instance rather than starting a second client.
+
+A managed client is started as `dhclient -d <ifname>` (foreground), so the
+daemon can watch its lifetime. On deactivate only a managed process is
+signalled; a reused system client is left alone.
+
+`dhclient-script` sources `/etc/dhclient-exit-hooks` after BOUND, RENEW,
+REBIND, EXPIRE and related events. The one-click installer appends a guarded
+source line for `/usr/local/libexec/nm-freebsd-dhcp-hook`; the hook runs
+`nm-notify-dhcp`, which forwards the environment to the internal
+`Dhcp.Notify` D-Bus method. A port install cannot safely edit /etc, so
+`pkg-message` prints the line to add manually.
+
+The optional `dhcpcd` backend starts `dhcpcd -4 -B` and is experimental:
+there is no dhcpcd-specific lease hook in this MVP, so address updates rely on
+the normal address poll and Gateway may be empty. No new port dependency is
+needed for the default `dhclient` path.
 
 ## XFCE panel plugin ABI
 

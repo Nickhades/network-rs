@@ -74,6 +74,19 @@ Port 的 XFCE 选项默认关闭；XFCE 系统上用 <code>make config</code> �
     sysrc nm_freebsd_enable=YES
     service nm_freebsd start
 
+## DHCP hook
+
+默认 DHCP 后端是 base <code>/sbin/dhclient</code>。一键安装器会安装
+<code>/usr/local/libexec/nm-notify-dhcp</code> 和
+<code>/usr/local/libexec/nm-freebsd-dhcp-hook</code>，然后向
+<code>/etc/dhclient-exit-hooks</code> 追加一条带保护的 source 行：
+
+    . /usr/local/libexec/nm-freebsd-dhcp-hook
+
+Port 安装不会修改 <code>/etc</code>；请按 <code>pkg-message</code> 打印的行手工添加。
+hook 把 BOUND/RENEW/EXPIRE 数据转发到内部 <code>Dhcp.Notify</code> 方法。
+依赖租约驱动 Gateway 更新时不要移除 hook。
+
 ## 访问控制
 
 D-Bus 策略只向 root 和 <code>wheel</code> 或 <code>network</code> 组成员授予完整控制权；

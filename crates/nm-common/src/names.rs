@@ -8,6 +8,7 @@ pub const NM_PATH: &str = "/org/freedesktop/NetworkManager";
 pub const NM_DEVICES_PATH: &str = "/org/freedesktop/NetworkManager/Devices";
 pub const NM_ACCESS_POINTS_PATH: &str = "/org/freedesktop/NetworkManager/AccessPoints";
 pub const NM_SETTINGS_PATH: &str = "/org/freedesktop/NetworkManager/Settings";
+pub const NM_DHCP_PATH: &str = "/org/freedesktop/NetworkManager/Dhcp";
 pub const NM_ACTIVE_CONNECTIONS_PATH: &str = "/org/freedesktop/NetworkManager/ActiveConnection";
 pub const NM_IP4_CONFIG_PATH: &str = "/org/freedesktop/NetworkManager/IP4Config";
 pub const NM_IP6_CONFIG_PATH: &str = "/org/freedesktop/NetworkManager/IP6Config";

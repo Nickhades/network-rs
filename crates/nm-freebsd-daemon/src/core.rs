@@ -17,9 +17,10 @@ use zbus::{Connection, ObjectServer, OwnedObjectPath, OwnedVariant};
 use crate::backend::{Backend, BackendEvent, ConnectRequest, WifiStatus};
 use crate::config::Config;
 use crate::dbus::{
-    AccessPointIface, ActiveConnectionIface, Bus, DeviceIface, Ip4ConfigIface, ManagerIface,
-    SettingsConnectionIface, SettingsIface, WiredIface, WirelessIface, root_path,
+    AccessPointIface, ActiveConnectionIface, Bus, DeviceIface, DhcpIface, Ip4ConfigIface,
+    ManagerIface, SettingsConnectionIface, SettingsIface, WiredIface, WirelessIface, root_path,
 };
+use crate::dhcp::{DhcpEvent, DhcpManager};
 use crate::model::{
     ActiveEntry, ApEntry, ConnectionProfile, CoreState, DeviceEntry, DeviceKind, Ip4Info,
     ProfileKind,
@@ -46,8 +47,10 @@ pub struct Core {
     pub config: Config,
     pub state: RwLock<CoreState>,
     pub backend: Arc<dyn Backend>,
+    pub dhcp: Arc<DhcpManager>,
     bus: OnceLock<Bus>,
     refresh_lock: Mutex<()>,
+    dhcp_events: Mutex<Option<mpsc::Receiver<DhcpEvent>>>,
 }
 
 impl Core {
@@ -61,12 +64,16 @@ impl Core {
             let profile = profile_from_stored(&stored, path.clone());
             state.connections.insert(path, profile);
         }
+        let (dhcp_tx, dhcp_rx) = mpsc::channel(64);
+        let dhcp = Arc::new(DhcpManager::new(&config, dhcp_tx));
         Arc::new(Self {
             config,
             state: RwLock::new(state),
             backend,
+            dhcp,
             bus: OnceLock::new(),
             refresh_lock: Mutex::new(()),
+            dhcp_events: Mutex::new(Some(dhcp_rx)),
         })
     }
 
@@ -89,6 +96,11 @@ impl Core {
         bus.server
             .at(names::NM_SETTINGS_PATH, SettingsIface::new(self.clone()))
             .await?;
+        bus.server
+            .at(names::NM_DHCP_PATH, DhcpIface::new(self.clone()))
+            .await?;
+
+        self.start_dhcp_events().await;
 
         let profiles: Vec<ConnectionProfile> = self
             .state
@@ -166,7 +178,24 @@ impl Core {
         let Some(kind) = self.classify(&link.ifname) else {
             return Ok(());
         };
-        let ip4 = self.ip4_for(&link.ifname);
+        let mut ip4 = self.ip4_for(&link.ifname);
+        if let Some(info) = ip4.as_mut() {
+            // Netlink/getifaddrs does not expose the DHCP router. Preserve the
+            // gateway received from the exit hook while the address is the
+            // same, until a newer hook replaces it.
+            let old = self
+                .state
+                .read()
+                .await
+                .devices
+                .get(&link.ifname)
+                .and_then(|device| device.ip4.clone());
+            if let Some(old) = old
+                && old.address == info.address
+            {
+                info.gateway = old.gateway;
+            }
+        }
         let mut changed_state: Option<(u32, u32, u32)> = None;
         let mut created = false;
         let path;
@@ -293,6 +322,7 @@ impl Core {
     }
 
     async fn remove_device(self: &Arc<Self>, ifname: &str) {
+        self.dhcp.stop(ifname);
         let (path, ap_paths, active_paths) = {
             let mut state = self.state.write().await;
             let Some(device) = state.devices.remove(ifname) else {
@@ -902,11 +932,7 @@ impl Core {
 
         match (profile.kind, device.kind) {
             (ProfileKind::Wifi, DeviceKind::Wifi) => {}
-            (ProfileKind::Ethernet, DeviceKind::Ethernet) => {
-                return Err(CoreError::NotSupported(
-                    "wired connection activation is not implemented in this MVP".to_string(),
-                ));
-            }
+            (ProfileKind::Ethernet, DeviceKind::Ethernet) => {}
             _ => {
                 return Err(CoreError::InvalidArgs(
                     "connection type does not match the device".to_string(),
@@ -1068,6 +1094,12 @@ impl Core {
             return;
         };
         let ifname = device.ifname.clone();
+        if device.kind == DeviceKind::Ethernet {
+            self.set_device_state(&ifname, device_state::CONFIG, device_state_reason::NONE)
+                .await;
+            self.begin_ip_config(&active_path, &ifname, None).await;
+            return;
+        }
         let key_mgmt = profile
             .key_mgmt
             .clone()
@@ -1113,7 +1145,7 @@ impl Core {
             }
             match self.backend.status(&ifname).await {
                 Ok(status) if status.state.is_connected() => {
-                    self.complete_activation(&active_path, &ifname, Some(status))
+                    self.begin_ip_config(&active_path, &ifname, Some(status))
                         .await;
                     return;
                 }
@@ -1145,7 +1177,7 @@ impl Core {
         .await;
     }
 
-    async fn complete_activation(
+    async fn begin_ip_config(
         self: &Arc<Self>,
         active_path: &OwnedObjectPath,
         ifname: &str,
@@ -1154,11 +1186,120 @@ impl Core {
         if !self.is_current_active(active_path).await {
             return;
         }
-        let ip4 = self.ip4_for(ifname);
-        if ip4.is_some() {
+        if let Some(status) = &status
+            && let Some(bssid) = &status.bssid
+        {
+            let key = ApEntry::ap_key(ifname, bssid);
             let mut state = self.state.write().await;
             if let Some(device) = state.devices.get_mut(ifname) {
-                device.ip4 = ip4.clone();
+                device.active_ap = Some(key);
+            }
+        }
+        self.set_device_state(ifname, device_state::IP_CONFIG, device_state_reason::NONE)
+            .await;
+
+        let existing_ip4 = self.ip4_for(ifname);
+        if self.dhcp.is_disabled() {
+            if let Some(ip4) = existing_ip4 {
+                tracing::info!(ifname, "DHCP disabled; using existing IPv4 address");
+                self.complete_activation_with_ip4(active_path, ifname, status, ip4)
+                    .await;
+            } else {
+                self.fail_activation(
+                    active_path,
+                    ifname,
+                    device_state_reason::CONFIG_FAILED,
+                    "DHCP backend is disabled and no IPv4 address exists",
+                )
+                .await;
+            }
+            return;
+        }
+
+        if let Err(error) = self.dhcp.start(ifname) {
+            if let Some(ip4) = existing_ip4 {
+                tracing::warn!(ifname, %error, "DHCP start failed; using existing IPv4 address");
+                self.complete_activation_with_ip4(active_path, ifname, status, ip4)
+                    .await;
+            } else {
+                self.fail_activation(
+                    active_path,
+                    ifname,
+                    device_state_reason::CONFIG_FAILED,
+                    &format!("failed to start DHCP: {error}"),
+                )
+                .await;
+            }
+            return;
+        }
+
+        let core = self.clone();
+        let active = active_path.clone();
+        let wait_ifname = ifname.to_string();
+        let existing_address = existing_ip4.as_ref().map(|info| info.address.clone());
+        let existing_grace = tokio::time::Instant::now() + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + self.config.dhcp_timeout;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if !core.is_current_active(&active).await {
+                    return;
+                }
+                let state = core
+                    .state
+                    .read()
+                    .await
+                    .devices
+                    .get(&wait_ifname)
+                    .map(|device| device.state);
+                if state != Some(device_state::IP_CONFIG) {
+                    return;
+                }
+                if let Some(ip4) = core.ip4_for(&wait_ifname) {
+                    let changed = existing_address
+                        .as_ref()
+                        .map(|address| address != &ip4.address)
+                        .unwrap_or(true);
+                    // An address may still be the old network's lease. Give
+                    // dhclient a short chance to publish a hook or change it,
+                    // then accept the existing address rather than lying that
+                    // there is no interface address.
+                    if changed || tokio::time::Instant::now() >= existing_grace {
+                        core.complete_activation_with_ip4(
+                            &active,
+                            &wait_ifname,
+                            status.clone(),
+                            ip4,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    core.downgrade_no_ip(&active, &wait_ifname).await;
+                    return;
+                }
+            }
+        });
+    }
+
+    async fn complete_activation_with_ip4(
+        self: &Arc<Self>,
+        active_path: &OwnedObjectPath,
+        ifname: &str,
+        status: Option<WifiStatus>,
+        mut ip4: Ip4Info,
+    ) {
+        if !self.is_current_active(active_path).await {
+            return;
+        }
+        if ip4.gateway.is_none() {
+            ip4.gateway = crate::system::default_gateway(ifname);
+        }
+        {
+            let mut state = self.state.write().await;
+            if let Some(device) = state.devices.get_mut(ifname) {
+                device.ip4 = Some(ip4.clone());
             }
         }
         let ip4_path = self.ensure_ip4_config(ifname).await;
@@ -1183,10 +1324,10 @@ impl Core {
             let old = device.state;
             device.state = device_state::ACTIVATED;
             device.state_reason = device_state_reason::NONE;
-            device.ip4 = ip4;
+            device.ip4 = Some(ip4.clone());
             device.ip4_config_path = ip4_path.clone();
             if active_ap.is_some() {
-                device.active_ap = active_ap.clone();
+                device.active_ap = active_ap;
             }
             if let Some(active) = state.active.get_mut(active_path) {
                 active.state = active_connection_state::ACTIVATED;
@@ -1212,6 +1353,207 @@ impl Core {
         self.notify_wireless(ifname, &[], &[]).await;
     }
 
+    async fn downgrade_no_ip(self: &Arc<Self>, active_path: &OwnedObjectPath, ifname: &str) {
+        let ip4_path = {
+            let state = self.state.read().await;
+            state
+                .devices
+                .get(ifname)
+                .and_then(|device| device.ip4_config_path.clone())
+        };
+        if let Some(bus) = self.bus.get()
+            && let Some(path) = &ip4_path
+        {
+            let _ = bus.server.remove::<Ip4ConfigIface, _>(path).await;
+        }
+        let old_state = {
+            let mut state = self.state.write().await;
+            let Some(active) = state.active.get_mut(active_path) else {
+                return;
+            };
+            if active.state == active_connection_state::DEACTIVATED {
+                return;
+            }
+            active.state = active_connection_state::DEACTIVATED;
+            active.ip4_config_path = None;
+            let Some(device) = state.devices.get_mut(ifname) else {
+                return;
+            };
+            let old = device.state;
+            device.state = device_state::IP_CONFIG;
+            device.state_reason = device_state_reason::CONFIG_FAILED;
+            device.ip4 = None;
+            device.ip4_config_path = None;
+            device.active_connection = None;
+            state.recompute_manager_state();
+            old
+        };
+        self.notify_device(
+            ifname,
+            Some((
+                old_state,
+                device_state::IP_CONFIG,
+                device_state_reason::CONFIG_FAILED,
+            )),
+        )
+        .await;
+        self.notify_active(active_path).await;
+        self.notify_ip4(ifname).await;
+        if let Some(bus) = self.bus.get() {
+            let _ = bus
+                .server
+                .remove::<ActiveConnectionIface, _>(active_path)
+                .await;
+        }
+        {
+            let mut state = self.state.write().await;
+            state.active.remove(active_path);
+            state.recompute_manager_state();
+        }
+        self.notify_manager().await;
+        self.dhcp.stop(ifname);
+        tracing::warn!(
+            ifname,
+            "DHCP did not produce an IPv4 address; degraded to CONNECTED_SITE"
+        );
+    }
+
+    pub async fn handle_dhcp_event(
+        self: &Arc<Self>,
+        ifname: &str,
+        reason: &str,
+        data: &HashMap<String, String>,
+    ) {
+        let reason = reason.to_ascii_uppercase();
+        tracing::debug!(ifname, reason, keys = ?data.keys().collect::<Vec<_>>(), "DHCP event");
+        match reason.as_str() {
+            "BOUND" | "RENEW" | "REBIND" => {
+                let Some(ip4) = self.dhcp_info_from_event(ifname, data) else {
+                    tracing::warn!(ifname, "DHCP event contains no usable IPv4 address");
+                    return;
+                };
+                let active = {
+                    let state = self.state.read().await;
+                    state
+                        .devices
+                        .get(ifname)
+                        .and_then(|device| state.active_for_device(&device.path))
+                        .cloned()
+                };
+                if let Some(active) = active {
+                    if active.state == active_connection_state::ACTIVATED {
+                        {
+                            let mut state = self.state.write().await;
+                            if let Some(device) = state.devices.get_mut(ifname) {
+                                device.ip4 = Some(ip4);
+                            }
+                        }
+                        self.ensure_ip4_config(ifname).await;
+                        self.notify_ip4(ifname).await;
+                    } else if active.state == active_connection_state::ACTIVATING {
+                        self.complete_activation_with_ip4(&active.path, ifname, None, ip4)
+                            .await;
+                    }
+                } else {
+                    // A system dhclient, or a reused instance, may report a
+                    // lease without an ActiveConnection created by us.
+                    {
+                        let mut state = self.state.write().await;
+                        if let Some(device) = state.devices.get_mut(ifname) {
+                            device.ip4 = Some(ip4);
+                            if device.state == device_state::DISCONNECTED
+                                || device.state == device_state::IP_CONFIG
+                            {
+                                device.state = device_state::ACTIVATED;
+                                device.state_reason = device_state_reason::NONE;
+                            }
+                        }
+                        state.recompute_manager_state();
+                    }
+                    self.ensure_ip4_config(ifname).await;
+                    self.notify_device(ifname, None).await;
+                    self.notify_manager().await;
+                    self.notify_ip4(ifname).await;
+                }
+            }
+            "EXPIRE" | "RELEASE" => {
+                let active = {
+                    let state = self.state.read().await;
+                    state
+                        .devices
+                        .get(ifname)
+                        .and_then(|device| state.active_for_device(&device.path))
+                        .map(|active| active.path.clone())
+                };
+                if let Some(active) = active {
+                    self.downgrade_no_ip(&active, ifname).await;
+                } else {
+                    let mut state = self.state.write().await;
+                    if let Some(device) = state.devices.get_mut(ifname) {
+                        device.ip4 = None;
+                        device.ip4_config_path = None;
+                        device.state = device_state::DISCONNECTED;
+                    }
+                    state.recompute_manager_state();
+                }
+                self.notify_device(ifname, None).await;
+                self.notify_manager().await;
+            }
+            "FAIL" | "TIMEOUT" => {
+                tracing::warn!(
+                    ifname,
+                    reason,
+                    "DHCP client reported failure; waiting for the grace timeout"
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn dhcp_info_from_event(
+        &self,
+        ifname: &str,
+        data: &HashMap<String, String>,
+    ) -> Option<Ip4Info> {
+        let system = self.ip4_for(ifname);
+        let address = data
+            .get("ip_address")
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .or_else(|| system.as_ref().map(|info| info.address.clone()))?;
+        let prefix = data
+            .get("subnet_mask")
+            .and_then(|mask| prefix_from_netmask(mask))
+            .or_else(|| system.as_ref().map(|info| info.prefix))
+            .unwrap_or(24);
+        let gateway = data
+            .get("routers")
+            .and_then(|value| value.split_whitespace().next())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| system.as_ref().and_then(|info| info.gateway.clone()))
+            .or_else(|| crate::system::default_gateway(ifname));
+        let mut dns: Vec<String> = data
+            .get("dns")
+            .map(|value| {
+                value
+                    .split_whitespace()
+                    .filter(|value| value.parse::<std::net::Ipv4Addr>().is_ok())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if dns.is_empty() {
+            dns = system.map(|info| info.dns).unwrap_or_default();
+        }
+        Some(Ip4Info {
+            address,
+            prefix,
+            gateway,
+            dns,
+        })
+    }
+
     async fn fail_activation(
         self: &Arc<Self>,
         active_path: &OwnedObjectPath,
@@ -1220,6 +1562,7 @@ impl Core {
         message: &str,
     ) {
         tracing::warn!(ifname, reason, message, "activation failed");
+        self.dhcp.stop(ifname);
         let old_state = {
             let mut state = self.state.write().await;
             if !state.active.contains_key(active_path) {
@@ -1300,6 +1643,9 @@ impl Core {
         }
         self.notify_active(active_path).await;
 
+        if let Some(device) = &device {
+            self.dhcp.stop(&device.ifname);
+        }
         if let Some(device) = &device
             && device.kind == DeviceKind::Wifi
             && let Err(error) = self.backend.disconnect(&device.ifname).await
@@ -1397,6 +1743,33 @@ impl Core {
     // ------------------------------------------------------------------
     // Backend / netlink event pumps
     // ------------------------------------------------------------------
+
+    async fn start_dhcp_events(self: &Arc<Self>) {
+        let mut guard = self.dhcp_events.lock().await;
+        let Some(mut rx) = guard.take() else {
+            return;
+        };
+        drop(guard);
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    DhcpEvent::Started {
+                        ifname,
+                        managed,
+                        backend,
+                    } => {
+                        tracing::debug!(ifname, managed, backend, "DHCP client started");
+                    }
+                    DhcpEvent::Exited { ifname, pid, code } => {
+                        tracing::info!(ifname, pid, code, "DHCP client exited");
+                    }
+                    DhcpEvent::Error { ifname, message } => {
+                        tracing::warn!(ifname, message, "DHCP client error");
+                    }
+                }
+            }
+        });
+    }
 
     fn start_backend_events(self: &Arc<Self>) {
         let (tx, mut rx) = mpsc::channel::<BackendEvent>(128);
@@ -2142,6 +2515,23 @@ fn profile_from_stored(stored: &StoredProfile, path: OwnedObjectPath) -> Connect
     }
 }
 
+fn prefix_from_netmask(mask: &str) -> Option<u8> {
+    let octets: Vec<u8> = mask
+        .split('.')
+        .map(|octet| octet.parse::<u8>())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if octets.len() != 4 {
+        return None;
+    }
+    let bits = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]);
+    let inverted = !bits;
+    if inverted & inverted.wrapping_add(1) != 0 {
+        return None;
+    }
+    Some(bits.count_ones() as u8)
+}
+
 fn fallback_links() -> Vec<crate::netlink::LinkInfo> {
     crate::system::interface_names()
         .into_iter()
@@ -2176,4 +2566,39 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn netmask_prefix() {
+        assert_eq!(prefix_from_netmask("255.255.255.0"), Some(24));
+        assert_eq!(prefix_from_netmask("255.255.0.0"), Some(16));
+        assert_eq!(prefix_from_netmask("255.255.255.255"), Some(32));
+        assert_eq!(prefix_from_netmask("0.0.0.0"), Some(0));
+        assert_eq!(prefix_from_netmask("255.0.255.0"), None);
+        assert_eq!(prefix_from_netmask("bad"), None);
+    }
+
+    #[test]
+    fn ip_config_degrades_to_site() {
+        let mut state = CoreState::new("test".to_string());
+        let mut device = DeviceEntry::new(
+            "wlan0".to_string(),
+            3,
+            DeviceKind::Wifi,
+            "00:00:00:00:00:03".to_string(),
+            1500,
+        );
+        device.state = device_state::IP_CONFIG;
+        state.devices.insert("wlan0".to_string(), device);
+        state.recompute_manager_state();
+        assert_eq!(
+            state.manager_state,
+            nm_common::consts::manager_state::CONNECTED_SITE
+        );
+        assert_eq!(state.connectivity, nm_common::consts::connectivity::LIMITED);
+    }
 }

@@ -3,6 +3,7 @@
 pub mod access_point;
 pub mod active_connection;
 pub mod device;
+pub mod dhcp;
 pub mod ip4_config;
 pub mod manager;
 pub mod settings;
@@ -16,6 +17,7 @@ pub use crate::settings::SettingsMap;
 pub use access_point::AccessPointIface;
 pub use active_connection::ActiveConnectionIface;
 pub use device::{DeviceIface, WiredIface, WirelessIface};
+pub use dhcp::DhcpIface;
 pub use ip4_config::Ip4ConfigIface;
 pub use manager::ManagerIface;
 pub use settings::{SettingsConnectionIface, SettingsIface};

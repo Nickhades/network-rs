@@ -307,13 +307,12 @@ impl CoreState {
         } else if self.active.values().any(|a| a.is_activating()) {
             self.manager_state = manager_state::CONNECTING;
             self.primary_connection = None;
-        } else if self
-            .devices
-            .values()
-            .any(|device| device.state == device_state::ACTIVATED)
-        {
+        } else if self.devices.values().any(|device| {
+            device.state == device_state::ACTIVATED || device.state == device_state::IP_CONFIG
+        }) {
             // A link that wpa_supplicant or DHCP brought up outside this
-            // daemon (for example a pre-existing Wi-Fi association).
+            // daemon, or a link whose DHCP lease did not arrive. Both are
+            // "site connected" without a usable global IP.
             self.manager_state = manager_state::CONNECTED_SITE;
             self.connectivity = nm_common::consts::connectivity::LIMITED;
             self.primary_connection = None;

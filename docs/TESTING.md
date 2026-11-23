@@ -29,8 +29,9 @@ The suite contains:
 - daemon unit tests: wpa scan/status parsing, netlink message parsing
   (synthetic and live link dump), getifaddrs/ifindex consistency, profile
   persistence, keyring storage/migration and 0600 permissions, caller
-  permission maps (`wheel`/`network`), settings round-trips, UUID
-  path-traversal rejection, CLI parsing.
+  permission maps (`wheel`/`network`), DHCP backend/process lifecycle,
+  netmask-to-prefix conversion, settings round-trips, UUID path-traversal
+  rejection, CLI parsing.
 - one plugin unit test for v4 UUID shape.
 - integration test `mvp_end_to_end` (private bus, fake datagram
   wpa_supplicant, real daemon, zbus client) in
@@ -60,10 +61,25 @@ The integration test is self-contained:
    - `GetPermissions` returns all 11 permission keys and `wifi-scan = yes`
      (admin/read-only decisions are unit-tested separately);
    - `DeactivateConnection` returns the device to state 30 and the daemon to
-     20.
+     20;
+   - a simulated `Dhcp.Notify` BOUND event publishes IP4Config with address
+     10.99.0.2/24 and Gateway 10.99.0.1 (the hook data path).
 
 It does not touch the host network. It skips gracefully if no `dbus-daemon`
 binary is available.
+
+## DHCP verification
+
+The integration test pushes a simulated BOUND through the internal
+`Dhcp.Notify` method and checks IP4Config Gateway/AddressData. The daemon unit
+tests cover netmask conversion, backend selection, the disabled backend, and a
+fake `dhclient` script (start, managed PID, stop). The real
+`dhclient -d` plus root-owned exit hook cannot be exercised without root and
+without risking the host link, so it remains a manual/live-test item.
+
+The staged installer test checks that `/etc/dhclient-exit-hooks` receives the
+guarded source line and that the notifier/hook binaries land in
+`/usr/local/libexec`.
 
 ## Security policy verification
 
@@ -213,8 +229,9 @@ Only on a test machine or a spare wlan clone:
 3. Call `AddAndActivateConnection` with a known SSID/PSK.
 4. Confirm `wpa_cli -i <if> status` reaches `COMPLETED`.
 5. Confirm `Device.State = 100`, active state 2, manager state 60.
-6. Confirm `IP4Config.AddressData` is populated **if** a DHCP client is
-   running for that interface; the daemon does not start DHCP itself.
+6. Confirm `IP4Config.AddressData`, `Gateway` and DNS are populated. The
+   daemon starts/reuses `dhclient` unless `--dhcp-backend` selects otherwise;
+   use a spare interface and have a recovery path.
 7. `DeactivateConnection`; confirm `DISCONNECTED` and that wpa_supplicant no
    longer reports the network as current.
 
@@ -251,8 +268,9 @@ binary, policy, activation service, rc script and plugin paths.
   it as root.
 - **`FAIL-BUSY` on scan**: wpa_supplicant is already scanning. `RequestScan`
   treats this as success.
-- **Connected but no IP**: expected without a DHCP client; see
-  [FREEBSD-NOTES.md](FREEBSD-NOTES.md) and the README limitations.
+- **Connected but no IP / CONNECTED_SITE**: check the selected DHCP backend,
+  `/var/run/dhclient/dhclient.<if>.pid`, `/etc/dhclient-exit-hooks` and the
+  lease timeout; see [FREEBSD-NOTES.md](FREEBSD-NOTES.md).
 - **No APs**: check `wpa_cli -i wlan0 scan_results`; the daemon uses the same
   data. A new scan may take several seconds.
 - **Plugin says "Wi-Fi unavailable"**: the daemon is not running, the bus policy

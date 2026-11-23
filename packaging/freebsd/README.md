@@ -69,6 +69,20 @@ Then reload the bus so it reads the new policy:
     sysrc nm_freebsd_enable=YES
     service nm_freebsd start
 
+## DHCP hook
+
+The default DHCP backend is the base `/sbin/dhclient`. The one-click installer
+installs `/usr/local/libexec/nm-notify-dhcp` and
+`/usr/local/libexec/nm-freebsd-dhcp-hook`, then appends a guarded source line
+to `/etc/dhclient-exit-hooks`:
+
+    . /usr/local/libexec/nm-freebsd-dhcp-hook
+
+A port install does not edit `/etc`; follow the line printed by
+`pkg-message`. The hook forwards BOUND/RENEW/EXPIRE data to the internal
+`Dhcp.Notify` method. Do not remove the hook while relying on lease-driven
+Gateway updates.
+
 ## Access control
 
 The D-Bus policy grants full control only to root and members of `wheel` or

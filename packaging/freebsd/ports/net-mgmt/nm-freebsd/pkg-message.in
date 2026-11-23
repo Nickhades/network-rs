@@ -13,7 +13,18 @@ Start it now:
 KDE and GNOME need no extra UI. XFCE users can add "NetworkManager FreeBSD"
 from the panel's "Add New Items" dialog after restarting xfce4-panel.
 
-The D-Bus policy installed in %%PREFIX%%/etc/dbus-1/system.d allows all local
-users to call the service (there is no polkit integration in this MVP).
-Tighten that file if the machine has untrusted local users.
+The D-Bus policy gives full control only to root and members of wheel or
+network. Add a desktop user who is not in wheel:
+
+    pw groupmod network -m <user>
+
+then log out and back in. Do not install this MVP on a multi-user or hostile
+local-user machine until polkit/SecretAgent support lands. Saved Wi-Fi
+passwords are in /var/db/nm-freebsd/keyring.json (0600) and are not encrypted
+at rest.
+
+To let the daemon observe DHCP leases, add this line to
+/etc/dhclient-exit-hooks (the one-click installer does it automatically):
+
+    . %%PREFIX%%/libexec/nm-freebsd-dhcp-hook
 ===========================================================================

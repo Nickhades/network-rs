@@ -171,6 +171,27 @@ link has an existing IPv4 address, or when an externally established link is
 observed with an address. It reads live device state, so a DHCP lease change is
 visible without recreating the object.
 
+## Internal DHCP notification (non-standard)
+
+The dhclient exit hook calls an internal object, not a NetworkManager API:
+
+```text
+path:      /org/freedesktop/NetworkManager/Dhcp
+interface: org.freedesktop.NetworkManager.Dhcp
+method:    Notify(s ifname, s reason, a{ss} data)
+```
+
+`reason` is BOUND, RENEW, REBIND, EXPIRE, RELEASE, FAIL or TIMEOUT. The data
+dictionary is built by `nm-notify-dhcp` from dhclient's exported
+`new_ip_address`, `new_subnet_mask`, `new_routers` and
+`new_domain_name_servers`. The method requires an administrator caller; the
+D-Bus policy does not allow it to unprivileged users. The daemon uses the first
+router as IP4Config Gateway and the first DNS address list entry as DNS.
+
+The ActiveConnection state remains ACTIVATING until an address is available;
+there is no NetworkManager "IP4_CONFIGURED" ActiveConnection state. The Device
+state is IP_CONFIG during this window.
+
 ## Frontend call paths
 
 A typical plasma-nm/GNOME scan/connect sequence maps to:

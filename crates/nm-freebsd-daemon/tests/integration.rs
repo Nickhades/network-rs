@@ -69,6 +69,8 @@ trait Device {
     fn device_type(&self) -> zbus::Result<u32>;
     #[zbus(property)]
     fn state(&self) -> zbus::Result<u32>;
+    #[zbus(property)]
+    fn ip4_config(&self) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[zbus::proxy(
@@ -93,6 +95,28 @@ trait AccessPoint {
     fn strength(&self) -> zbus::Result<u8>;
     #[zbus(property)]
     fn flags(&self) -> zbus::Result<u32>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.IP4Config",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/"
+)]
+trait Ip4Config {
+    #[zbus(property)]
+    fn gateway(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn address_data(&self) -> zbus::Result<Vec<HashMap<String, OwnedVariant>>>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Dhcp",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/org/freedesktop/NetworkManager/Dhcp"
+)]
+trait Dhcp {
+    fn notify(&self, ifname: &str, reason: &str, data: HashMap<String, String>)
+    -> zbus::Result<()>;
 }
 
 #[zbus::proxy(
@@ -360,6 +384,24 @@ async fn mvp_end_to_end() {
     let (device_path, device) = found.expect("wifi device");
     assert_eq!(device.device_type().await.unwrap(), 2);
 
+    // Seed an address through the DHCP hook path so the activation test does
+    // not depend on the host's wlan0 having a live lease.
+    let dhcp = DhcpProxy::new(&conn).await.expect("dhcp proxy");
+    let mut seed = HashMap::new();
+    seed.insert("ip_address".to_string(), "10.98.0.2".to_string());
+    seed.insert("subnet_mask".to_string(), "255.255.255.0".to_string());
+    seed.insert("routers".to_string(), "10.98.0.1".to_string());
+    seed.insert("dns".to_string(), "10.98.0.53".to_string());
+    dhcp.notify("wlan0", "BOUND", seed)
+        .await
+        .expect("seed DHCP BOUND");
+    let seeded = wait_for(Duration::from_secs(5), || {
+        let device = device.clone();
+        async move { device.state().await.unwrap_or(0) == 100 }
+    })
+    .await;
+    assert!(seeded, "DHCP seed did not activate the device");
+
     let wireless = WirelessProxy::builder(&conn)
         .path(device_path.clone())
         .build()
@@ -488,4 +530,39 @@ async fn mvp_end_to_end() {
     .await;
     assert!(disconnected, "deactivation did not settle");
     assert!(!fake.selected.load(Ordering::SeqCst));
+
+    // Simulate /etc/dhclient-exit-hooks pushing a BOUND event. This exercises
+    // the internal Dhcp.Notify interface, gateway extraction and IP4Config
+    // publication without touching the host interface.
+    let mut data = HashMap::new();
+    data.insert("ip_address".to_string(), "10.99.0.2".to_string());
+    data.insert("subnet_mask".to_string(), "255.255.255.0".to_string());
+    data.insert("routers".to_string(), "10.99.0.1 10.99.0.254".to_string());
+    data.insert("dns".to_string(), "10.99.0.53".to_string());
+    dhcp.notify("wlan0", "BOUND", data)
+        .await
+        .expect("DHCP BOUND notification");
+
+    let dhcp_ready = wait_for(Duration::from_secs(5), || {
+        let device = device.clone();
+        async move { device.state().await.unwrap_or(0) == 100 }
+    })
+    .await;
+    assert!(dhcp_ready, "DHCP BOUND did not activate the device");
+    let ip4_path = device.ip4_config().await.expect("ip4 config path");
+    let ip4 = Ip4ConfigProxy::builder(&conn)
+        .path(ip4_path)
+        .build()
+        .await
+        .expect("ip4 proxy");
+    assert_eq!(ip4.gateway().await.unwrap(), "10.99.0.1");
+    let address_data = ip4.address_data().await.unwrap();
+    assert_eq!(
+        address_data
+            .first()
+            .and_then(|entry| entry.get("address"))
+            .and_then(|value| String::try_from(value.clone()).ok())
+            .as_deref(),
+        Some("10.99.0.2")
+    );
 }

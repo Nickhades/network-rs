@@ -126,6 +126,35 @@ There is no polkit or SecretAgent yet. A desktop user outside the admin groups
 gets a read-only UI; the README warning tells the user how to delegate through
 `network`.
 
+## DHCP and IP configuration
+
+After L2 association (or immediately for Ethernet), the device moves to
+`IP_CONFIG` and the active connection stays `ACTIVATING`. The manager:
+
+- reuses a running dhclient if `/var/run/dhclient/dhclient.<ifname>.pid`
+  names a live process (the rc.conf setup);
+- otherwise starts a managed foreground `dhclient -d <ifname>` by default;
+- can use `dhcpcd` instead when selected; that path is experimental and has no
+  dedicated lease hook in this MVP;
+- waits for a DHCP event or an address change, then publishes IP4Config and
+  sets the device/active state to `ACTIVATED`.
+
+`/etc/dhclient-exit-hooks` sources
+`/usr/local/libexec/nm-freebsd-dhcp-hook`, which runs `nm-notify-dhcp`.
+That small binary reads dhclient's environment and calls the internal
+`org.freedesktop.NetworkManager.Dhcp.Notify` method on
+`/org/freedesktop/NetworkManager/Dhcp`. The daemon extracts the first
+`new_routers` entry as Gateway, `new_subnet_mask` as the prefix, and
+`new_domain_name_servers` as DNS. There is no NetworkManager
+`IP4_CONFIGURED` ActiveConnection state; the standard device state
+`IP_CONFIG` covers this phase, while the ActiveConnection remains
+`ACTIVATING` until an address exists.
+
+On timeout (default 30 s) the device remains `IP_CONFIG`, the active
+connection is removed, and the manager degrades to `CONNECTED_SITE`. On
+EXPIRE/RELEASE the lease is cleared immediately. A managed client is stopped on
+deactivate; a reused system dhclient is left running.
+
 ## Activation
 
 `AddAndActivateConnection` and `ActivateConnection` follow the same core path:
@@ -159,6 +188,9 @@ Two pumps feed the core:
 - **netlink:** link add/delete/change updates device presence and state; address
   changes refresh IPv4 information. If the netlink monitor cannot be created,
   a five-second getifaddrs poll is used.
+- **DHCP events:** the dhclient exit hook calls `Dhcp.Notify`; BOUND/RENEW/
+  REBIND publish the lease (address, prefix, Gateway, DNS), while EXPIRE/RELEASE
+  clear it. FAIL/TIMEOUT wait for the common 30-second grace timer.
 
 AP refresh is serialized by a mutex. New APs are registered as objects before
 `AccessPointAdded` is emitted; removed APs are unregistered after

@@ -48,6 +48,13 @@ plasma-nm / GNOME network panel / XFCE panel plugin
    socket                         getifaddrs + resolv.conf
 ```
 
+## Version history
+
+- **v0.1.0** — initial NetworkManager compatibility MVP; kept as a historical
+  archive tag.
+- **v0.2.0 / main** — Phase 1 security hardening (policy groups, caller uid,
+  keyring) and Phase 2 DHCP (dhclient/dhcpcd, exit hooks, wired activation).
+
 ## Status
 
 Working, tested MVP on FreeBSD 15.1-RELEASE (amd64):
@@ -64,6 +71,10 @@ Working, tested MVP on FreeBSD 15.1-RELEASE (amd64):
   and network menu (screenshots below);
 - Phase 1 security hardening: `wheel`/`network` D-Bus policy, per-caller uid
   checks, and a separate 0600 keyring for Wi-Fi passphrases;
+- Phase 2 DHCP: base `dhclient` by default, optional `dhcpcd`, existing system
+  dhclient reuse, exit-hook lease events, IP4Config gateway, and wired DHCP
+  (process/hook paths are simulated in tests; a live root DHCP test remains
+  manual);
 - one-click install, dependency check, compile/test, read-only smoke test and
   isolated desktop-test scripts are included.
 
@@ -82,8 +93,10 @@ FreeBSD. Those frontends are the next compatibility milestone; see
 | Settings | list/get/add/update/delete/reload connections, NewConnection/ConnectionRemoved |
 | Settings.Connection | get settings/secrets, update, update-unsaved, delete, Updated/Removed |
 | Connection.Active | state, default, devices, IP4Config, IDs |
-| IP4Config | address data, nameservers, DNS data (read-only) |
+| IP4Config | address data, gateway, nameservers, DNS data (read-only) |
 | Wi-Fi backend | open, WPA2-PSK, WPA3-SAE, scanning, status, connect, disconnect |
+| DHCP | base `dhclient` (default), optional `dhcpcd`, system-client reuse, exit-hook events, wired and Wi-Fi |
+| Wired activation | ActivateConnection DHCP branch; link/address state and IP4Config |
 | Transports | wpa_supplicant datagram control socket (default on FreeBSD), optional `fi.w1.wpa_supplicant1` D-Bus backend |
 | Link events | netlink RTM_GETLINK dump + multicast monitor, getifaddrs polling fallback |
 | Desktop | KDE/GNOME/XFCE/unknown detection and logging; XFCE panel plugin |
@@ -120,6 +133,11 @@ These differ from the original architecture sketch and are handled in the code:
    speaks the FreeBSD wire layout directly, including FreeBSD's `sockaddr_nl`
    (which starts with a length byte, unlike Linux). If netlink is unavailable,
    interface list polling through getifaddrs keeps the daemon functional.
+5. **The dhclient PID path is not `/var/run/dhclient.*.pid`.** FreeBSD uses
+   `/var/run/dhclient/dhclient.<ifname>.pid`; the daemon checks that file and
+   reuses a running rc.conf dhclient instead of forking a duplicate. The
+   lease/exit events come from `/etc/dhclient-exit-hooks`, which
+   `dhclient-script` sources after BOUND/RENEW/EXPIRE.
 
 ## One-click install and test
 
@@ -143,8 +161,10 @@ scripts/install.sh --uninstall --yes     # stop and remove installed files
 ```
 
 The installer uses the files in `packaging/freebsd`, backs up existing policy,
-service and rc files as `*.nm-freebsd.bak`, enables the rc service, applies
-the policy with `org.freedesktop.DBus.ReloadConfig` and runs the smoke test.
+service, rc and dhclient-hook files as `*.nm-freebsd.bak`, installs the
+`nm-notify-dhcp` bridge and appends the DHCP exit-hook source line, enables the
+rc service, applies the policy with `org.freedesktop.DBus.ReloadConfig` and runs
+the smoke test.
 If Rust comes from rustup under your user, the installer derives
 `CARGO_HOME`/`RUSTUP_HOME` for the root build; for development, build as
 yourself and pass `--no-build`. It never removes `/var/db/nm-freebsd` unless
@@ -185,7 +205,8 @@ cargo build --release -p nm-xfce-plugin   # optional, requires XFCE dev libs
 cargo test --workspace
 ```
 
-The daemon binary is `target/release/nm-freebsd-daemon`. The plugin is
+The daemon binary is `target/release/nm-freebsd-daemon`; the DHCP hook
+bridge is `target/release/nm-notify-dhcp`. The plugin is
 `target/release/libnm_freebsd_xfce.so`; its generated desktop file lives under
 `target/release/build/nm-xfce-plugin-*/out/nm_freebsd_xfce.desktop`.
 
@@ -210,6 +231,10 @@ For production install the files from `packaging/freebsd`:
 
 ```sh
 install -m 755 target/release/nm-freebsd-daemon /usr/local/bin/
+install -d /usr/local/libexec
+install -m 755 target/release/nm-notify-dhcp /usr/local/libexec/
+sed 's|%%PREFIX%%|/usr/local|g' packaging/freebsd/libexec/nm-freebsd-dhcp-hook.in \
+  > /usr/local/libexec/nm-freebsd-dhcp-hook
 install -d /usr/local/etc/dbus-1/system.d /usr/local/share/dbus-1/system-services
 install -m 644 packaging/freebsd/etc/dbus-1/system.d/org.freedesktop.NetworkManager.conf \
   /usr/local/etc/dbus-1/system.d/
@@ -224,6 +249,13 @@ sysrc nm_freebsd_enable=YES
 service nm_freebsd start
 ```
 
+The one-click installer also installs `nm-notify-dhcp` and appends the DHCP
+source line. For a manual install, add it yourself:
+
+```sh
+printf '\n. /usr/local/libexec/nm-freebsd-dhcp-hook\n' >> /etc/dhclient-exit-hooks
+```
+
 The port skeleton is in
 `packaging/freebsd/ports/net-mgmt/nm-freebsd`; see
 [packaging/freebsd/README.md](packaging/freebsd/README.md). The port's
@@ -234,6 +266,8 @@ The port skeleton is in
 
 ```
 --backend auto|wpa-ctrl|wpa-dbus   wpa_supplicant transport (default auto)
+--dhcp-backend auto|dhclient|dhcpcd  DHCP client (default auto, prefers base dhclient)
+--dhcp-timeout SECONDS             wait for a lease before CONNECTED_SITE (default 30)
 --wpa-ctrl-dir PATH                default /var/run/wpa_supplicant
 --state-dir PATH                   profile storage, default /var/db/nm-freebsd
 --wifi-interface NAME              repeatable; auto-detected wlan* otherwise
@@ -298,14 +332,12 @@ Do not expose the system bus to untrusted machines. Treat
 
 Deliberately out of scope for this MVP:
 
-- **DHCP/address configuration and routes are not applied by the daemon.**
-  After association the daemon publishes the address that FreeBSD already has
-  (for example from `ifconfig_wlan0="WPA DHCP"`). A system without a DHCP
-  client will associate but have no IPv4 address. Gateway is left empty.
-- Wired activation is not implemented; Ethernet devices are visible with link
-  state and any existing IPv4/IP4Config, but `ActivateConnection` on them
-  returns `NotSupported`.
-- No IPv6 (`IP6Config` is `/`), no DHCP option objects, no secret agent,
+- DHCP is implemented through `dhclient` (default) or optional `dhcpcd`.
+  The daemon starts a managed client when no system instance exists, otherwise
+  it reuses the existing one. Exit hooks report BOUND/RENEW/REBIND/EXPIRE.
+  A lease timeout (default 30 s) leaves the device in IP_CONFIG and degrades the
+  manager to CONNECTED_SITE rather than claiming a usable IP.
+- No IPv6 (`IP6Config` is `/`), no DHCPv6, no DHCP option objects, no secret agent,
   no polkit, no VPN, no enterprise (802.1X), no WEP, no hidden-network UI.
 - No automatic activation of saved profiles. wpa_supplicant's own configured
   networks may still associate; the daemon will report that state.
@@ -321,8 +353,9 @@ Deliberately out of scope for this MVP:
 
 ```
 crates/nm-common/          constants, desktop detection, SSID/security helpers
-crates/nm-freebsd-daemon/  daemon, D-Bus objects, wpa_ctrl/wpa_dbus, netlink
-  tests/integration.rs     private bus + fake wpa_supplicant end-to-end test
+crates/nm-freebsd-daemon/  daemon, D-Bus objects, wpa_ctrl/wpa_dbus, netlink, DHCP
+  tests/integration.rs     private bus + fake wpa/clients end-to-end test
+crates/nm-dhcp-notify/     dhclient-exit-hooks -> Dhcp.Notify bridge
 crates/nm-xfce-plugin/     XFCE panel plugin (cdylib)
 scripts/                   install, deps, build-test, smoke-test, desktop-test
 packaging/freebsd/         policy, activation service, rc.d, port skeleton
