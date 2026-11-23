@@ -14,3 +14,4 @@ pub mod model;
 pub mod netlink;
 pub mod settings;
 pub mod system;
+pub mod wpa_config;
