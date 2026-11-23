@@ -353,8 +353,9 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
 - 不支持 IPv6（<code>IP6Config</code> 为 <code>/</code>）、DHCPv6、DHCP option 对象、SecretAgent、
   polkit、VPN、企业级 802.1X、WEP、隐藏网络 UI。
 - 不自动激活已保存配置。wpa_supplicant 自己配置的网络仍可能关联，守护进程会报告该状态。
-- 守护进程启动前已经连上的 Wi-Fi 会显示为 <code>CONNECTED_SITE</code>，在通过守护进程执行一次
-  激活前没有 <code>ActiveConnection</code> 对象。
+- 守护进程启动前已经连上的 Wi-Fi 会在启动时被接管为
+  <code>ActiveConnection</code>，并绑定匹配的 profile 和现有 IPv4 配置；
+  不需要前端再触发一次激活。
 - 只有非空扫描结果不再包含某个 AP 时才移除 AP；空扫描结果保留旧列表以避免界面闪烁。
 - XFCE 插件由 NetworkManager 标准信号驱动，保留 30 秒兜底轮询；
   守护进程重启后会重连信号监听。

@@ -429,9 +429,9 @@ Deliberately out of scope for this MVP:
   no polkit, no VPN, no enterprise (802.1X), no WEP, no hidden-network UI.
 - No automatic activation of saved profiles. wpa_supplicant's own configured
   networks may still associate; the daemon will report that state.
-- A Wi-Fi link that was already up when the daemon started is reported as
-  `CONNECTED_SITE` with no `ActiveConnection` object until an activation is
-  performed through the daemon.
+- A Wi-Fi link that was already up when the daemon started is adopted into an
+  `ActiveConnection` at startup, with the matching profile and the existing
+  IPv4 configuration. No frontend-triggered activation is required.
 - Access points are only removed when a non-empty scan no longer contains them;
   an empty scan result preserves the previous list to avoid flicker.
 - The XFCE plugin is signal-driven (standard NetworkManager signals) with a
