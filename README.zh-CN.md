@@ -53,9 +53,11 @@
 - **v0.2.6** — 隐藏 SSID profile 支持
   （<code>802-11-wireless.hidden</code>）和
   <code>nm-freebsd-cli wifi connect --hidden</code>；历史存档。
-- **v0.2.7 / main** — profile owner-uid 持久化，以及 owner/admin 的
-  <code>GetSecrets</code> 授权；D-Bus policy 不再在总线层拒绝所有非管理员，
-  由 daemon 做 owner 判定。
+- **v0.2.7** — profile owner-uid 持久化，以及 owner/admin 的
+  <code>GetSecrets</code> 授权；历史存档。
+- **v0.2.8 / main** — 检测已在管理该接口的外部
+  <code>dhcpcd</code>/<code>dhclient</code>，不再启动第二个 DHCP 客户端，
+  避免双租约。
 
 ## 当前状态
 

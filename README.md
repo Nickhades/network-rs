@@ -69,9 +69,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 - **v0.2.6** — hidden SSID profile support
   (`802-11-wireless.hidden`) and `nm-freebsd-cli wifi connect --hidden`;
   historical.
-- **v0.2.7 / main** — profile owner-uid persistence and owner/admin
-  `GetSecrets` authorization; the D-Bus policy lets the daemon decide rather
-  than rejecting every non-admin caller at the bus.
+- **v0.2.7** — profile owner-uid persistence and owner/admin
+  `GetSecrets` authorization; historical.
+- **v0.2.8 / main** — detect an external `dhcpcd`/`dhclient` already managing
+  the interface and do not start a second DHCP client (prevents double leases).
 
 ## Status
 

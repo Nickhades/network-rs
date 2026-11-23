@@ -114,6 +114,43 @@ impl DhcpManager {
         if self.kind == DhcpBackendKind::Disabled {
             return Err(DhcpError::Disabled);
         }
+        // dhclient and dhcpcd can both be running. Starting the configured
+        // backend while the other client already manages this interface
+        // produces two leases and two addresses. Reuse the external client
+        // instead of launching a third process.
+        if let Some(other) = other_backend(self.kind)
+            && let Some(pid) = external_pid(ifname, other)
+        {
+            if self.is_managed(ifname) {
+                self.stop(ifname);
+                for _ in 0..20 {
+                    if !self.is_managed(ifname) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+            tracing::warn!(
+                ifname,
+                pid,
+                backend = backend_name(other),
+                "reusing external DHCP client; not starting a second one"
+            );
+            self.reused
+                .lock()
+                .expect("dhcp reused")
+                .insert(ifname.to_string());
+            let _ = self.tx.try_send(DhcpEvent::Started {
+                ifname: ifname.to_string(),
+                managed: false,
+                backend: backend_name(other),
+            });
+            return Ok(DhcpStart {
+                managed: false,
+                backend: backend_name(other),
+            });
+        }
+
         let managed_pid = {
             let children = self.children.lock().expect("dhcp children");
             children.get(ifname).copied()
@@ -320,6 +357,53 @@ impl DhcpManager {
     }
 }
 
+fn dhcpcd_iface_pid(ifname: &str) -> Option<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-ax", "-o", "pid=,command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_dhcpcd_pid(&String::from_utf8_lossy(&output.stdout), ifname)
+}
+
+fn parse_dhcpcd_pid(text: &str, ifname: &str) -> Option<u32> {
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(pid) = fields.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let command: Vec<&str> = fields.collect();
+        if command.contains(&"dhcpcd:") && command.contains(&ifname) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+fn pid_from_file(path: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let pid: u32 = text.trim().parse().ok()?;
+    pid_alive(pid).then_some(pid)
+}
+
+fn other_backend(kind: DhcpBackendKind) -> Option<DhcpBackendKind> {
+    match kind {
+        DhcpBackendKind::Dhclient => Some(DhcpBackendKind::Dhcpcd),
+        DhcpBackendKind::Dhcpcd => Some(DhcpBackendKind::Dhclient),
+        DhcpBackendKind::Auto | DhcpBackendKind::Disabled => None,
+    }
+}
+
+fn external_pid(ifname: &str, backend: DhcpBackendKind) -> Option<u32> {
+    match backend {
+        DhcpBackendKind::Dhclient => pid_from_file(&dhclient_pid_path(ifname)),
+        DhcpBackendKind::Dhcpcd => dhcpcd_iface_pid(ifname),
+        DhcpBackendKind::Auto | DhcpBackendKind::Disabled => None,
+    }
+}
+
 fn dhclient_pid_path(ifname: &str) -> PathBuf {
     PathBuf::from(format!("/var/run/dhclient/dhclient.{ifname}.pid"))
 }
@@ -421,6 +505,14 @@ mod tests {
             dhclient_pid_path("wlan0"),
             PathBuf::from("/var/run/dhclient/dhclient.wlan0.pid")
         );
+    }
+
+    #[test]
+    fn parses_dhcpcd_interface_process() {
+        let text = " 7210 dhcpcd: [manager] [ip4] [ip6] (dhcpcd)\n 7231 dhcpcd: [BPF ARP] wlan0 192.168.2.226 (dhcpcd)\n19262 dhcpcd: [BPF ARP] ue0 10.83.82.59 (dhcpcd)\n";
+        assert_eq!(parse_dhcpcd_pid(text, "wlan0"), Some(7231));
+        assert_eq!(parse_dhcpcd_pid(text, "ue0"), Some(19262));
+        assert_eq!(parse_dhcpcd_pid(text, "wlan1"), None);
     }
 
     #[tokio::test(flavor = "current_thread")]
