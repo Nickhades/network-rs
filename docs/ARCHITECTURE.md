@@ -7,8 +7,11 @@
 1. **Desktop dispatch** (`crates/nm-common/src/desktop.rs`,
    `crates/nm-freebsd-daemon/src/daemon.rs`) reads the XDG desktop variables
    once and logs which frontend is expected. It never starts a UI. KDE and
-   GNOME use their native frontends; XFCE uses the plugin installed by the
-   port; unknown desktops get D-Bus only.
+   GNOME use their native frontends **when those binaries were built with
+   NetworkManager support and a functional libnm/NetworkManagerQt**; XFCE uses
+   the plugin installed by the port; unknown desktops get D-Bus only. A
+   prebuilt desktop panel compiled without NM cannot be added at runtime by
+   registering the D-Bus name.
 2. **D-Bus service** (`crates/nm-freebsd-daemon/src/dbus/`) is the facade. zbus
    owns `org.freedesktop.NetworkManager`, exports the manager, device,
    access-point, settings, active-connection and IP4Config objects, and emits

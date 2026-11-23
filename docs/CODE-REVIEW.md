@@ -83,6 +83,10 @@ this repository. This is a working review, not a formal security audit.
   rest, so root (and anyone who can read root files) can recover PSKs.
 - A non-`wheel`/`network` desktop user gets a read-only UI until added to one of
   those groups. This is deliberate, not a bug.
+- The installed FreeBSD GNOME Control Center has no network panel and no
+  `libnm` linkage; `networkmanager-shim` is a build stub. The D-Bus service
+  cannot make a frontend compiled without NM support appear. Phase 4 needs a
+  functional libnm/NetworkManagerQt and rebuilt desktop packages.
 - A deactivate that races the very first `ObjectServer::at` registration in
   `activate` can leave an orphaned active-connection object. The window is
   narrow (immediate deactivate before the callback returns) and the object is

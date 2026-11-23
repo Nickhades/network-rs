@@ -6,7 +6,9 @@
 
 1. **桌面探测与分发**（<code>crates/nm-common/src/desktop.rs</code>、
    <code>crates/nm-freebsd-daemon/src/daemon.rs</code>）只读取一次 XDG 桌面变量并记录预期前端。
-   它绝不启动 UI。KDE 和 GNOME 使用原生前端；XFCE 使用 Port 安装的插件；未知桌面只提供 D-Bus。
+   它绝不启动 UI。KDE 和 GNOME 使用原生前端，**前提是这些二进制在编译时启用了
+   NetworkManager 支持并链接了功能性 libnm/NetworkManagerQt**；XFCE 使用 Port 安装的插件；
+   未知桌面只提供 D-Bus。编译时未带 NM 的预构建桌面面板无法在运行时通过注册 D-Bus 名称补出来。
 2. **D-Bus 服务**（<code>crates/nm-freebsd-daemon/src/dbus/</code>）是门面。zbus 拥有
    <code>org.freedesktop.NetworkManager</code>，导出 Manager、Device、AccessPoint、Settings、
    ActiveConnection、IP4Config 对象，并发出 NetworkManager 形状的信号。

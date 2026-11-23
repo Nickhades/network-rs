@@ -76,6 +76,9 @@ lease hook，以及尚未在真实 plasma-nm/GNOME 面板上验证。自动测�
   keyring 是独立的 0600 文件，但没有静态加密，root（以及能读取 root 文件的人）可以恢复 PSK。
 - 不属于 <code>wheel</code>/<code>network</code> 的桌面用户会得到只读界面，
   直到被加入其中一个组。这是有意设计，不是 bug。
+- 本机 FreeBSD GNOME Control Center 没有 network 面板，也没有链接 <code>libnm</code>；
+  <code>networkmanager-shim</code> 是编译空壳。D-Bus 服务无法让编译时未启用 NM 的前端
+  出现面板。Phase 4 需要功能性 libnm/NetworkManagerQt 和重新构建的桌面包。
 - 如果 <code>activate</code> 第一次 <code>ObjectServer::at</code> 注册期间发生停用，
   可能留下孤立的 active 对象；窗口很窄（回调返回前立即停用），重启守护进程会清理。
   每设备激活互斥锁可以彻底关闭该窗口。

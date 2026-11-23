@@ -111,8 +111,39 @@
    复用 rc.conf 已启动的 dhclient，避免重复 fork。租约事件来自
    <code>/etc/dhclient-exit-hooks</code>，由 <code>dhclient-script</code> 在
    BOUND/RENEW/EXPIRE 后 source。
+6. **桌面前端需要功能性 NM 客户端库，而不只是 D-Bus 服务。** 本机的
+   <code>gnome-control-center</code> 47.7 包没有 <code>network</code> 面板，
+   也没有链接 <code>libnm</code>；<code>networkmanager-shim</code> 只是 5.9 KB
+   的编译 shim。注册 <code>org.freedesktop.NetworkManager</code> 是必要条件，
+   但编译时未启用 NM 的预构建前端无法在运行时补出面板。
+   Phase 4 还需要功能性 <code>libnm</code>/NetworkManagerQt 和重新构建的桌面包。
 
 ## 一键安装与测试
+
+### 预编译一键安装（不需要在 root 下编译）
+
+release 产物已经在 <code>target/release</code> 中。在仓库根目录执行：
+
+    sudo ./install-oneclick.sh
+
+它会安装 daemon、XFCE 插件、<code>nm-notify-dhcp</code>、D-Bus policy、
+activation service、rc.d 脚本和 dhclient hook，然后启动服务并运行冒烟测试。
+只安装、不启动：
+
+    sudo ./install-oneclick.sh --no-start --no-smoke
+
+安装后重启面板并添加插件：
+
+    xfce4-panel -r
+    # 面板 → 添加新项目 → NetworkManager FreeBSD
+
+卸载：
+
+    sudo ./uninstall-oneclick.sh
+
+安装器会备份/恢复 <code>/etc/dhclient-exit-hooks</code>。
+
+### 构建并安装
 
     sudo scripts/install.sh                  # 依赖检查、构建、安装、启用/启动、冒烟
     sudo scripts/install.sh --install-deps   # 先安装缺失的 pkg 依赖
@@ -293,7 +324,9 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
 - 只有非空扫描结果不再包含某个 AP 时才移除 AP；空扫描结果保留旧列表以避免界面闪烁。
 - XFCE 插件由 NetworkManager 标准信号驱动，保留 30 秒兜底轮询；
   守护进程重启后会重连信号监听。
-- 真实 plasma-nm、GNOME 面板兼容测试仍待完成。
+- 真实 plasma-nm、GNOME 面板兼容测试仍待完成。本机 GNOME Control Center
+  编译时没有 network 面板，现有 <code>networkmanager-shim</code> 也是空壳；
+  要出现面板还需要功能性 libnm/重新构建的桌面包。
 
 ## 仓库结构
 
@@ -309,6 +342,8 @@ root 可以读取。不要把系统总线暴露给不可信机器。应把
     artifacts/desktop-test/    面板/菜单截图
     docs/                      英文规范文档
     docs/zh-CN/                中文镜像文档
+    install-oneclick.sh        预编译 root 安装器（无需 Rust 构建）
+    uninstall-oneclick.sh      卸载入口
     Makefile                   脚本快捷入口
 
 ## 许可证

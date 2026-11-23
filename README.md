@@ -142,8 +142,45 @@ These differ from the original architecture sketch and are handled in the code:
    reuses a running rc.conf dhclient instead of forking a duplicate. The
    lease/exit events come from `/etc/dhclient-exit-hooks`, which
    `dhclient-script` sources after BOUND/RENEW/EXPIRE.
+6. **Desktop frontends need a functional NM client library, not only the
+   D-Bus service.** The installed `gnome-control-center` 47.7 package on this
+   host has no `network` panel and does not link `libnm`;
+   `networkmanager-shim` is a 5.9 KB build shim. Registering
+   `org.freedesktop.NetworkManager` is necessary, but a prebuilt frontend that
+   was compiled without NetworkManager support cannot grow a panel at runtime.
+   A functional `libnm`/NetworkManagerQt and rebuilt desktop packages are the
+   remaining Phase 4 prerequisite.
 
 ## One-click install and test
+
+### Prebuilt installer (no Rust build)
+
+The release artifacts are already built in `target/release`. From this
+checkout, run:
+
+```sh
+sudo ./install-oneclick.sh
+```
+
+This installs the daemon, XFCE plugin, `nm-notify-dhcp`, D-Bus policy,
+activation service, rc.d script and dhclient hook, then starts the service and
+runs the smoke test. To install without starting:
+
+```sh
+sudo ./install-oneclick.sh --no-start --no-smoke
+```
+
+After installation, restart the panel and add the plugin:
+
+```sh
+xfce4-panel -r
+# Panel → Add New Items → NetworkManager FreeBSD
+```
+
+Use `sudo ./uninstall-oneclick.sh` to remove it. The generated
+`/etc/dhclient-exit-hooks` block is backed up/restored by the installer.
+
+### Build-and-install
 
 ```sh
 sudo scripts/install.sh                  # deps check, build, install, enable/start, smoke
@@ -353,7 +390,10 @@ Deliberately out of scope for this MVP:
 - The XFCE plugin is signal-driven (standard NetworkManager signals) with a
   30-second fallback poll; it reconnects its signal listener after daemon
   restarts.
-- Live plasma-nm and GNOME panel testing is still pending.
+- Live plasma-nm and GNOME panel testing is still pending. The installed
+  GNOME Control Center was built without the network panel and the available
+  `networkmanager-shim` is a stub; a functional libnm/rebuilt desktop package
+  is required before those panels can appear.
 
 ## Repository map
 
@@ -369,6 +409,8 @@ tools/                     fake wpa server, port crate-list generator
 artifacts/desktop-test/    panel/menu screenshots and logs
 docs/                      English architecture, D-Bus, scan flow, FreeBSD, testing, review
 docs/zh-CN/                Chinese mirrors of the same documents
+install-oneclick.sh        prebuilt root installer (no Rust build)
+uninstall-oneclick.sh      remove the installed files
 Makefile                   convenience targets for the scripts
 ```
 
