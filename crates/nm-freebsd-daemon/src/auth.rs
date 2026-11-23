@@ -83,9 +83,10 @@ pub async fn require_activation_access(
     }
 }
 
-/// Pure owner/admin decision for activation and disconnection.
+/// Pure owner/admin decision for activation and disconnection. An unowned
+/// profile is system-wide (Wi-Fi sourced from wpa_supplicant.conf).
 pub fn activation_access_allowed(caller_uid: u32, owner_uid: Option<u32>, admin: bool) -> bool {
-    admin || owner_uid == Some(caller_uid)
+    admin || owner_uid.is_none() || owner_uid == Some(caller_uid)
 }
 
 pub async fn require_settings_write_access(
@@ -111,7 +112,7 @@ pub async fn require_settings_write_access(
 }
 
 pub fn settings_write_access_allowed(caller_uid: u32, owner_uid: Option<u32>, admin: bool) -> bool {
-    admin || owner_uid == Some(caller_uid)
+    admin || owner_uid.is_none() || owner_uid == Some(caller_uid)
 }
 
 pub async fn require_secret_access(
@@ -136,9 +137,10 @@ pub async fn require_secret_access(
     }
 }
 
-/// Pure owner/admin decision, kept separate from NSS for tests.
+/// Pure owner/admin decision, kept separate from NSS for tests. An unowned
+/// profile is system-wide (Wi-Fi sourced from wpa_supplicant.conf).
 pub fn secret_access_allowed(caller_uid: u32, owner_uid: Option<u32>, admin: bool) -> bool {
-    admin || owner_uid == Some(caller_uid)
+    admin || owner_uid.is_none() || owner_uid == Some(caller_uid)
 }
 
 pub async fn require_admin(
@@ -327,7 +329,7 @@ mod tests {
     fn activation_access_is_owner_or_admin() {
         assert!(activation_access_allowed(1001, Some(1001), false));
         assert!(!activation_access_allowed(1002, Some(1001), false));
-        assert!(!activation_access_allowed(1001, None, false));
+        assert!(activation_access_allowed(1001, None, false));
         assert!(activation_access_allowed(1002, Some(1001), true));
         assert!(activation_access_allowed(0, None, true));
     }
@@ -336,7 +338,7 @@ mod tests {
     fn settings_write_is_owner_or_admin() {
         assert!(settings_write_access_allowed(1001, Some(1001), false));
         assert!(!settings_write_access_allowed(1002, Some(1001), false));
-        assert!(!settings_write_access_allowed(1001, None, false));
+        assert!(settings_write_access_allowed(1001, None, false));
         assert!(settings_write_access_allowed(1002, Some(1001), true));
     }
 
@@ -344,7 +346,7 @@ mod tests {
     fn secret_access_is_owner_or_admin() {
         assert!(secret_access_allowed(1001, Some(1001), false));
         assert!(!secret_access_allowed(1002, Some(1001), false));
-        assert!(!secret_access_allowed(1001, None, false));
+        assert!(secret_access_allowed(1001, None, false));
         assert!(secret_access_allowed(1002, Some(1001), true));
         assert!(secret_access_allowed(0, None, true));
     }

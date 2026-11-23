@@ -266,6 +266,13 @@ impl Backend for WpaCtrlBackend {
             self.command(request.ifname, &format!("SET_NETWORK {id} bssid {bssid}"))
                 .await?;
         }
+        if !request.id_str.is_empty() {
+            self.command(
+                request.ifname,
+                &format!("SET_NETWORK {id} id_str {}", request.id_str),
+            )
+            .await?;
+        }
 
         if request.key_mgmt == "NONE" {
             self.command(request.ifname, &format!("SET_NETWORK {id} key_mgmt NONE"))
@@ -303,6 +310,10 @@ impl Backend for WpaCtrlBackend {
     async fn disconnect(&self, ifname: &str) -> Result<(), BackendError> {
         self.command(ifname, "DISCONNECT").await?;
         Ok(())
+    }
+
+    async fn reconfigure(&self, ifname: &str) -> Result<(), BackendError> {
+        self.command(ifname, "RECONFIGURE").await.map(|_| ())
     }
 
     fn spawn_events(self: Arc<Self>, tx: mpsc::Sender<BackendEvent>) {

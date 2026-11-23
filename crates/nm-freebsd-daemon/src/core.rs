@@ -26,6 +26,7 @@ use crate::model::{
     ProfileKind,
 };
 use crate::settings::{self as profile_store, ProfileDraft, SettingsMap, StoredProfile, owned};
+use crate::wpa_config::{WpaConfig, WpaNetwork};
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -59,13 +60,101 @@ pub struct Core {
 impl Core {
     pub fn new(config: Config, backend: Arc<dyn Backend>) -> Arc<Self> {
         let mut state = CoreState::new(crate::system::hostname());
-        for stored in profile_store::load_profiles(&config.state_dir) {
+        let stored_profiles = profile_store::load_profiles(&config.state_dir);
+        let mut wpa = WpaConfig::load(&config.wpa_config_path).unwrap_or_default();
+        let mut changed = false;
+        let mut migrate = Vec::new();
+
+        for stored in &stored_profiles {
+            if stored.kind() != ProfileKind::Wifi {
+                continue;
+            }
+            migrate.push(stored.uuid.clone());
+            let existing = wpa.networks.iter().position(|network| {
+                network.id_str.as_deref() == Some(stored.uuid.as_str())
+                    || network.ssid == stored.ssid
+            });
+            match existing {
+                Some(index) => {
+                    let network = &mut wpa.networks[index];
+                    if network.id_str.is_none() {
+                        network.id_str = Some(stored.uuid.clone());
+                        changed = true;
+                    }
+                    if network.psk.is_none() && stored.psk.is_some() {
+                        network.psk = stored.psk.clone();
+                        changed = true;
+                    }
+                    if network.key_mgmt.is_empty() {
+                        network.key_mgmt = stored
+                            .key_mgmt
+                            .clone()
+                            .unwrap_or_else(|| "NONE".to_string());
+                        changed = true;
+                    }
+                }
+                None => {
+                    wpa.networks.push(WpaNetwork {
+                        ssid: stored.ssid.clone(),
+                        psk: stored.psk.clone(),
+                        key_mgmt: stored
+                            .key_mgmt
+                            .clone()
+                            .unwrap_or_else(|| "NONE".to_string()),
+                        id_str: Some(stored.uuid.clone()),
+                        hidden: stored.hidden,
+                        disabled: false,
+                        extra: Vec::new(),
+                    });
+                    changed = true;
+                }
+            }
+        }
+
+        for network in &mut wpa.networks {
+            let valid = network
+                .id_str
+                .as_deref()
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .is_some();
+            if !valid {
+                network.id_str = Some(Uuid::new_v4().to_string());
+                changed = true;
+            }
+        }
+        if changed && let Err(error) = wpa.write_atomic(&config.wpa_config_path) {
+            tracing::warn!(%error, path = %config.wpa_config_path.display(), "failed to write wpa config");
+        } else if changed {
+            for uuid in &migrate {
+                if let Err(error) = profile_store::delete_profile(&config.state_dir, uuid) {
+                    tracing::warn!(%error, uuid, "failed to remove migrated Wi-Fi JSON profile");
+                }
+            }
+        }
+
+        for stored in &stored_profiles {
+            if stored.kind() == ProfileKind::Wifi {
+                continue;
+            }
             if state.connections.values().any(|p| p.uuid == stored.uuid) {
                 continue;
             }
             let path = state.next_connection_path();
-            let profile = profile_from_stored(&stored, path.clone());
+            let profile = profile_from_stored(stored, path.clone());
             state.connections.insert(path, profile);
+        }
+        for network in &wpa.networks {
+            let uuid = network
+                .id_str
+                .clone()
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            if state.connections.values().any(|p| p.uuid == uuid) {
+                continue;
+            }
+            let path = state.next_connection_path();
+            state
+                .connections
+                .insert(path.clone(), profile_from_wpa(network, uuid, path));
         }
         let (dhcp_tx, dhcp_rx) = mpsc::channel(64);
         let dhcp = Arc::new(DhcpManager::new(&config, dhcp_tx));
@@ -670,11 +759,91 @@ impl Core {
         self.add_connection(draft, persist).await
     }
 
+    async fn add_wifi_connection(
+        self: &Arc<Self>,
+        draft: ProfileDraft,
+        persist: bool,
+    ) -> Result<OwnedObjectPath, CoreError> {
+        let uuid = draft.uuid.clone();
+        let reconfigure_ifname = draft.ifname.clone();
+        let network = wpa_network_from_draft(&draft);
+        if persist {
+            let mut config = WpaConfig::load(&self.config.wpa_config_path).unwrap_or_default();
+            config.upsert(network);
+            config
+                .write_atomic(&self.config.wpa_config_path)
+                .map_err(CoreError::Io)?;
+            self.reconfigure_wifi(reconfigure_ifname.as_deref()).await;
+        }
+        let profile = ConnectionProfile {
+            path: root_path(),
+            uuid: uuid.clone(),
+            id: draft.id,
+            kind: ProfileKind::Wifi,
+            ifname: draft.ifname,
+            ssid: draft.ssid,
+            psk: draft.psk,
+            key_mgmt: draft.key_mgmt,
+            hidden: draft.hidden,
+            // wpa_supplicant.conf is system-wide; there is no per-profile
+            // owner for Wi-Fi networks after the SSOT migration.
+            owner_uid: None,
+            autoconnect: true,
+            timestamp: unix_now(),
+        };
+        let existing = self
+            .state
+            .read()
+            .await
+            .connections
+            .values()
+            .find(|profile| profile.uuid == uuid)
+            .map(|profile| profile.path.clone());
+        let (path, updated) = if let Some(path) = existing {
+            let mut profile = profile;
+            profile.path = path.clone();
+            self.state
+                .write()
+                .await
+                .connections
+                .insert(path.clone(), profile);
+            (path, true)
+        } else {
+            let mut state = self.state.write().await;
+            let path = state.next_connection_path();
+            let mut profile = profile;
+            profile.path = path.clone();
+            state.connections.insert(path.clone(), profile);
+            (path, false)
+        };
+        let profile = self
+            .state
+            .read()
+            .await
+            .connections
+            .get(&path)
+            .cloned()
+            .ok_or_else(|| CoreError::UnknownObject(path.to_string()))?;
+        if let Err(error) = self.register_settings_connection(&profile).await {
+            self.state.write().await.connections.remove(&path);
+            return Err(error);
+        }
+        if updated {
+            self.notify_settings_connection_updated(&uuid).await;
+        } else {
+            self.notify_settings_new(&path).await;
+        }
+        Ok(path)
+    }
+
     pub async fn add_connection(
         self: &Arc<Self>,
         draft: ProfileDraft,
         persist: bool,
     ) -> Result<OwnedObjectPath, CoreError> {
+        if draft.kind == ProfileKind::Wifi {
+            return self.add_wifi_connection(draft, persist).await;
+        }
         let uuid = draft.uuid.clone();
         let mut stored = StoredProfile::from_draft(&draft);
         let profile_fields = (
@@ -776,6 +945,25 @@ impl Core {
         Ok(path)
     }
 
+    async fn reconfigure_wifi(&self, ifname: Option<&str>) {
+        let ifname = if let Some(ifname) = ifname {
+            Some(ifname.to_string())
+        } else {
+            self.state
+                .read()
+                .await
+                .devices
+                .values()
+                .find(|device| device.kind == DeviceKind::Wifi)
+                .map(|device| device.ifname.clone())
+        };
+        if let Some(ifname) = ifname
+            && let Err(error) = self.backend.reconfigure(&ifname).await
+        {
+            tracing::warn!(%error, ifname, "failed to reload wpa_supplicant configuration");
+        }
+    }
+
     async fn register_settings_connection(
         self: &Arc<Self>,
         profile: &ConnectionProfile,
@@ -842,6 +1030,40 @@ impl Core {
             .ok_or_else(|| CoreError::UnknownObject(path.to_string()))?;
         let draft = profile_store::parse_settings(&settings, Some(&existing))
             .map_err(CoreError::InvalidArgs)?;
+        if existing.kind == ProfileKind::Wifi {
+            if persist {
+                let mut config = WpaConfig::load(&self.config.wpa_config_path).unwrap_or_default();
+                let mut network = wpa_network_from_draft(&draft);
+                network.id_str = Some(existing.uuid.clone());
+                config.upsert(network);
+                config
+                    .write_atomic(&self.config.wpa_config_path)
+                    .map_err(CoreError::Io)?;
+                self.reconfigure_wifi(existing.ifname.as_deref()).await;
+            }
+            let updated = ConnectionProfile {
+                path: path.clone(),
+                uuid: existing.uuid.clone(),
+                id: draft.id,
+                kind: ProfileKind::Wifi,
+                ifname: draft.ifname,
+                ssid: draft.ssid,
+                psk: draft.psk,
+                key_mgmt: draft.key_mgmt,
+                hidden: draft.hidden,
+                owner_uid: None,
+                autoconnect: true,
+                timestamp: draft.timestamp,
+            };
+            self.state
+                .write()
+                .await
+                .connections
+                .insert(path.clone(), updated);
+            self.notify_settings_connection_updated(&existing.uuid)
+                .await;
+            return Ok(true);
+        }
         let stored = StoredProfile::from_draft(&draft);
         let updated = ConnectionProfile {
             path: path.clone(),
@@ -914,6 +1136,23 @@ impl Core {
         for active in dependents {
             let _ = self.deactivate(&active).await;
         }
+        if profile.kind == ProfileKind::Wifi {
+            let mut config = WpaConfig::load(&self.config.wpa_config_path).unwrap_or_default();
+            if config.remove(&profile.ssid, Some(&profile.uuid)) {
+                if let Err(error) = config.write_atomic(&self.config.wpa_config_path) {
+                    tracing::warn!(%error, uuid = %profile.uuid, "failed to write wpa config");
+                }
+                self.reconfigure_wifi(profile.ifname.as_deref()).await;
+            }
+            self.notify_settings_connection_removed(&profile.uuid).await;
+            if let Some(bus) = self.bus.get() {
+                let _ = bus.server.remove::<SettingsConnectionIface, _>(path).await;
+            }
+            self.state.write().await.connections.remove(path);
+            let _ = profile_store::delete_profile(&self.config.state_dir, &profile.uuid);
+            self.notify_settings_removed(path).await;
+            return Ok(());
+        }
         self.notify_settings_connection_removed(&profile.uuid).await;
         if let Some(bus) = self.bus.get() {
             let _ = bus.server.remove::<SettingsConnectionIface, _>(path).await;
@@ -941,6 +1180,10 @@ impl Core {
 
     pub async fn reload_connections(self: &Arc<Self>) -> Result<bool, CoreError> {
         for stored in profile_store::load_profiles(&self.config.state_dir) {
+            // Wi-Fi profiles are sourced from wpa_supplicant.conf.
+            if stored.kind() == ProfileKind::Wifi {
+                continue;
+            }
             let existing = self
                 .state
                 .read()
@@ -1013,7 +1256,7 @@ impl Core {
                 .find(|profile| {
                     profile.kind == draft.kind
                         && profile.ssid == draft.ssid
-                        && (profile.owner_uid == owner_uid || admin)
+                        && (profile.owner_uid.is_none() || profile.owner_uid == owner_uid || admin)
                 })
                 .map(|profile| (profile.uuid.clone(), profile.path.clone()))
         };
@@ -1032,7 +1275,7 @@ impl Core {
                             && profile.path != connection
                             && profile.kind == draft.kind
                             && profile.ssid == draft.ssid
-                            && profile.owner_uid == owner_uid
+                            && (profile.owner_uid.is_none() || profile.owner_uid == owner_uid)
                     })
                     .map(|profile| profile.path.clone())
                     .collect()
@@ -1294,6 +1537,7 @@ impl Core {
             psk: profile.psk.as_deref(),
             key_mgmt: &key_mgmt,
             bssid: bssid.as_deref(),
+            id_str: &profile.uuid,
             hidden: profile.hidden,
         };
         if let Err(error) = self.backend.connect(&request).await {
@@ -2870,6 +3114,39 @@ async fn emit_props(
             &(interface, changed, invalidated),
         )
         .await;
+}
+
+fn profile_from_wpa(
+    network: &WpaNetwork,
+    uuid: String,
+    path: OwnedObjectPath,
+) -> ConnectionProfile {
+    ConnectionProfile {
+        path,
+        uuid,
+        id: ssid_to_string(&network.ssid),
+        kind: ProfileKind::Wifi,
+        ifname: None,
+        ssid: network.ssid.clone(),
+        psk: network.psk.clone(),
+        key_mgmt: Some(network.key_mgmt.clone()),
+        hidden: network.hidden,
+        owner_uid: None,
+        autoconnect: true,
+        timestamp: unix_now(),
+    }
+}
+
+fn wpa_network_from_draft(draft: &ProfileDraft) -> WpaNetwork {
+    WpaNetwork {
+        ssid: draft.ssid.clone(),
+        psk: draft.psk.clone(),
+        key_mgmt: draft.key_mgmt.clone().unwrap_or_else(|| "NONE".to_string()),
+        id_str: Some(draft.uuid.clone()),
+        hidden: draft.hidden,
+        disabled: false,
+        extra: Vec::new(),
+    }
 }
 
 fn profile_from_stored(stored: &StoredProfile, path: OwnedObjectPath) -> ConnectionProfile {

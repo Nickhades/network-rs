@@ -118,16 +118,16 @@ Access control has three layers:
 2. `auth.rs` resolves the caller's Unix uid through
    `org.freedesktop.DBus.GetConnectionUnixUser`. `ActivateConnection`,
    `DeactivateConnection`, `Device.Disconnect` and `GetSecrets` allow the
-   profile owner or an administrator. `AddAndActivateConnection[2]` creates a
-   profile owned by the caller. Settings `Update`/`Delete` allow the profile
-   owner or an administrator; `Enable`, `Sleep` and host-wide operations still
-   call `require_admin`. `GetPermissions` is intentionally coarse and reports
-   machine-wide control (plus `settings-modify-own=yes`), not per-profile
-   ownership.
-3. Saved PSKs live in `/var/db/nm-freebsd/keyring.json` (0600), separate from
-   the 0600 profile JSON. Legacy plaintext `psk` fields are migrated on load.
-   The keyring is not encrypted at rest; root can read it, so this is a
-   separation/least-exposure measure, not a secret vault.
+   profile owner, an unowned system profile, or an administrator;
+   `AddAndActivateConnection[2]` is likewise open to local callers.
+   Ethernet `Update`/`Delete` keep owner/admin rules; `Enable`, `Sleep` and
+   host-wide operations still call `require_admin`. `GetPermissions` is
+   intentionally coarse and reports machine-wide control (plus
+   `settings-modify-own=yes`), not per-profile ownership.
+3. Wi-Fi networks live in `/etc/wpa_supplicant.conf` (system-wide, plaintext
+   PSK, root-owned). Each block's `id_str` is the profile UUID. The daemon
+   imports and writes that file; Wi-Fi PSKs are no longer stored in JSON or the
+   keyring. Ethernet profiles remain JSON under `/var/db/nm-freebsd`.
 
 There is no polkit or SecretAgent yet. A desktop user outside the admin
 groups can manage their own profiles but cannot modify system settings; the

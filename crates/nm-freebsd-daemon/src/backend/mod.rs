@@ -122,6 +122,7 @@ pub struct ConnectRequest<'a> {
     pub psk: Option<&'a str>,
     pub key_mgmt: &'a str,
     pub bssid: Option<&'a str>,
+    pub id_str: &'a str,
     pub hidden: bool,
 }
 
@@ -145,6 +146,11 @@ pub trait Backend: Send + Sync {
     async fn connect(&self, request: &ConnectRequest<'_>) -> Result<(), BackendError>;
 
     async fn disconnect(&self, ifname: &str) -> Result<(), BackendError>;
+
+    /// Reload a backend that reads an on-disk network configuration.
+    async fn reconfigure(&self, _ifname: &str) -> Result<(), BackendError> {
+        Ok(())
+    }
 
     /// Spawn long-lived event listeners. Implementations must not block.
     fn spawn_events(self: Arc<Self>, tx: mpsc::Sender<BackendEvent>);

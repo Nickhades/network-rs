@@ -519,6 +519,11 @@ async fn mvp_end_to_end() {
         .await
         .expect("add and activate");
 
+    let wpa_text = std::fs::read_to_string(state_dir.path().join("wpa_supplicant.conf"))
+        .expect("wpa_supplicant.conf written");
+    assert!(wpa_text.contains("ssid=\"Cafe WiFi\""), "{wpa_text}");
+    assert!(wpa_text.contains("id_str="), "{wpa_text}");
+
     let active = ActiveProxy::builder(&conn)
         .path(active_path.clone())
         .build()

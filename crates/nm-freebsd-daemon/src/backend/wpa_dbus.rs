@@ -350,6 +350,9 @@ impl Backend for WpaDbusBackend {
         if let Some(bssid) = request.bssid.filter(|value| !value.is_empty()) {
             args.insert("BSSID".to_string(), owned(bssid.to_string()));
         }
+        if !request.id_str.is_empty() {
+            args.insert("id_str".to_string(), owned(request.id_str.to_string()));
+        }
         if request.hidden {
             args.insert("ScanSSID".to_string(), owned(true));
         }

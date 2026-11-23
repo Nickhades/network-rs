@@ -6,15 +6,13 @@
 
 > ### 安全警告：目前不要直接安装在多用户系统上
 >
-> 这个 MVP 没有 polkit，也没有 SecretAgent。root 和
-> <code>wheel</code>/<code>network</code> 组成员拥有完整控制权；profile owner
-> 可以创建、编辑、删除、激活/断开自己的 profile 并读取自己的密钥，
-> 其他本地用户只读。整机 enable/sleep 仍需要管理员组：
-> <code>pw groupmod network -m &lt;user&gt;</code>，然后注销并重新登录。
-> 守护进程以 root 运行，可以修改整台机器的 Wi-Fi 配置。
-> 保存的 Wi-Fi 密码放在 <code>/var/db/nm-freebsd/keyring.json</code>（权限 0600），
-> 与 profile 分离，但**没有静态加密**：root 可以读取。
-> 在 polkit/SecretAgent 完成前，不要在共享、多用户或存在不可信本地用户的机器上安装。
+> 这个 MVP 没有 polkit，也没有 SecretAgent。Wi-Fi 网络定义现在是
+> <code>/etc/wpa_supplicant.conf</code> 中的系统级条目，PSK 为明文：
+> 任何被 D-Bus policy 允许的本地用户都可以通过 daemon 激活并读取密钥。
+> Ethernet profile 仍保留 per-profile owner。整机 enable/sleep 仍需要
+> <code>wheel</code>/<code>network</code>。守护进程以 root 运行，可以修改
+> 系统级 Wi-Fi 配置。在 polkit/SecretAgent 完成前，不要在共享、多用户或
+> 存在不可信本地用户的机器上安装。
 
 这是一个用 Rust 编写的 FreeBSD 原生 NetworkManager D-Bus 服务实现。守护进程在系统总线上拥有 <code>org.freedesktop.NetworkManager</code>，导出桌面前端已经认识的 NetworkManager 对象树。真实网络操作仍由 FreeBSD 完成：Wi-Fi 通过 wpa_supplicant，链路和事件通过 netlink，地址和 DNS 通过 getifaddrs / resolv.conf 读取。
 
@@ -40,9 +38,10 @@
 
 ## 版本历史
 
-- **v0.2.18 / main** — 启动时不扫描，只发布 wpa_supplicant 已有的缓存
-  BSS 列表；XFCE 的 Saved connections 增加 Connect（有缓存 AP 时使用其
-  BSSID）。本文档描述当前代码。
+- **v0.3.0 / main** — Wi-Fi profile 改为以
+  <code>/etc/wpa_supplicant.conf</code> 为唯一来源；daemon 启动时导入、
+  Settings 修改时写回，不再把 Wi-Fi PSK 存到 JSON/keyring。
+  本文档描述当前代码。
 - 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
   历史说明见 GitHub releases。
 
@@ -347,38 +346,40 @@ XFCE 插件是会话级的，守护进程是系统级的。插件每次请求都
 
 ## 配置存储
 
-配置是 <code>/var/db/nm-freebsd/connections/*.json</code> 下的小型 JSON 文件
-（目录 0700，文件 0600）。只持久化守护进程实际能应用的字段：UUID、id、类型、
-SSID（字节数组）、密钥管理方式、自动连接和时间戳。密码单独存放在
-<code>/var/db/nm-freebsd/keyring.json</code>（0600），以 profile UUID 为键；
-旧 profile 中的明文 <code>psk</code> 会在启动时迁移并重写为不含密码的格式。
-D-Bus settings 字典由这些字段重建，密钥不会写入日志。
+Wi-Fi 网络定义位于 <code>/etc/wpa_supplicant.conf</code>（系统级、明文 PSK、
+root 所有），daemon 启动时导入，Settings 的 Add/Update/Delete 写回；
+每个 network 的 <code>id_str</code> 就是 profile UUID。
+<code>/var/db/nm-freebsd</code> 只保留 Ethernet profile，不再接收新的 Wi-Fi PSK。
+旧 JSON Wi-Fi profile 会在启动时迁移到 wpa 配置。
+<code>/var/db/nm-freebsd/connections</code> 只保留 Ethernet JSON profile；
+Wi-Fi 不再写 keyring。D-Bus settings 字典由 wpa 配置中的
+SSID/PSK/key_mgmt/id_str 重建，密钥不会写入日志。
 
 ## 安全
 
 root 和 <code>wheel</code>/<code>network</code> 组成员拥有完整方法访问权；
 守护进程还会对每个操作独立检查 caller uid。非管理员用户可以：
 
-- 激活 <code>owner_uid</code> 等于自己的 profile；
-- 断开自己拥有的活动连接；
-- 对自己拥有的活动连接调用 <code>Device.Disconnect()</code>；
-- 读取自己 profile 的 <code>GetSecrets()</code>；
-- 调用 <code>AddAndActivateConnection[2]</code>，创建归自己所有的 profile 并激活；
+- 激活系统级 Wi-Fi profile；
+- 断开 Wi-Fi 活动连接；
+- 对 Wi-Fi 活动连接调用 <code>Device.Disconnect()</code>；
+- 读取系统级 Wi-Fi profile 的 <code>GetSecrets()</code>；
+- 调用 <code>AddAndActivateConnection[2]</code>；
 - 读取 Manager/Device/AP 属性、列出不含密钥的 settings、发起扫描。
 
-profile owner 或管理员可以创建、<code>Update</code>、<code>Delete</code>
-自己的 profile；<code>Enable</code>、<code>Sleep</code> 和整机操作仍要求
-<code>wheel</code>/<code>network</code>。没有 <code>owner_uid</code> 的旧 profile
-仍仅限管理员。D-Bus 策略允许 owner 路径进入 daemon，由 daemon 做 owner/admin 判定。
+Wi-Fi profile 在迁移后是系统级的，创建/<code>Update</code>/<code>Delete</code>
+不再按 owner 判定；Ethernet profile 仍保留 owner/admin 规则。
+<code>Enable</code>、<code>Sleep</code> 和整机操作仍要求
+<code>wheel</code>/<code>network</code>。
 
 目前仍然没有 polkit 和 SecretAgent。<code>GetPermissions</code> 只回答整机控制权限，
 不表达 per-profile ownership。管理员可以授予完整控制权：
 
     pw groupmod network -m <user>
 
-然后注销并重新登录。keyring 是独立的 0600 文件，但**没有静态加密**，
-root 可以读取。不要把系统总线暴露给不可信机器。应把
-<code>/var/db/nm-freebsd</code> 视为敏感目录。
+然后注销并重新登录。Wi-Fi PSK 现在在
+<code>/etc/wpa_supplicant.conf</code> 中明文保存，root 可读，daemon 也会向
+本地用户暴露系统级 Wi-Fi 密钥；不要把系统总线暴露给不可信机器。
 
 ## 限制与路线图
 

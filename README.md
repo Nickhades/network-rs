@@ -6,16 +6,14 @@ Repository: <https://github.com/Nickhades/network-rs>
 
 > ### Security warning: do not install this on a multi-user system yet
 >
-> This MVP has no polkit and no SecretAgent. Root and members of
-> `wheel`/`network` have full control. A profile owner can create, edit,
-> delete, activate and deactivate that profile and read its secrets; other
-> local users are read-only. Machine-wide enable/sleep still requires an
-> administrator group: `pw groupmod network -m <user>` (then log out and back
-> in). The daemon runs as root and can change machine-wide Wi-Fi settings.
-> Saved Wi-Fi passphrases live in `/var/db/nm-freebsd/keyring.json` (mode 0600)
-> separately from profiles, but they are **not encrypted at rest**: root can
-> read them. Do not install this on a shared, multi-user or hostile-local-user
-> machine until polkit/SecretAgent support lands.
+> This MVP has no polkit and no SecretAgent. Wi-Fi networks are now
+> system-level entries in `/etc/wpa_supplicant.conf` with plaintext PSKs:
+> any local user allowed by the D-Bus policy can activate them and read their
+> secrets through the daemon. Ethernet profiles keep per-profile ownership.
+> Machine-wide enable/sleep still requires `wheel`/`network`.
+> The daemon runs as root and can change system Wi-Fi settings.
+> Do not install this on a shared, multi-user or hostile-local-user machine
+> until polkit/SecretAgent support lands.
 
 A native FreeBSD implementation of the NetworkManager D-Bus service, written in
 Rust. The daemon owns `org.freedesktop.NetworkManager` on the system bus and
@@ -53,10 +51,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.2.18 / main** — publish wpa_supplicant's cached BSS list without
-  issuing a scan on startup, and add a Connect action to XFCE Saved
-  connections (using the cached AP's BSSID when available). This document
-  describes the current tree.
+- **v0.3.0 / main** — Wi-Fi profiles moved to
+  `/etc/wpa_supplicant.conf` as the single source of truth; the daemon imports
+  them, writes them on Settings changes, and no longer stores Wi-Fi PSKs in
+  JSON/keyring. This document describes the current tree.
 - Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
   GitHub releases page for their historical notes.
 
@@ -423,13 +421,12 @@ require restarting the panel.
 
 ## Profile storage
 
-Profiles are small JSON documents in `/var/db/nm-freebsd/connections/*.json`
-(directory 0700, files 0600). Only fields this daemon can apply are persisted:
-UUID, id, type, SSID (byte array), key management, autoconnect and timestamp.
-Passphrases are stored separately in `/var/db/nm-freebsd/keyring.json` (0600),
-keyed by profile UUID; older profiles with a plaintext `psk` are migrated on
-startup and rewritten without it. The D-Bus settings dictionaries are
-reconstructed from those fields. Secrets are never logged.
+Wi-Fi networks live in `/etc/wpa_supplicant.conf` (system-wide, plaintext
+PSK, root-owned). The daemon imports them at startup and writes them back on
+Settings Add/Update/Delete; `id_str` in each block is the profile UUID.
+`/var/db/nm-freebsd` retains only Ethernet profiles and does not receive new
+Wi-Fi PSKs. Existing JSON Wi-Fi profiles are migrated into the wpa config on
+startup. Secrets are never logged.
 
 ## Security
 
@@ -437,18 +434,17 @@ Root and members of `wheel`/`network` have full method access. The daemon
 also checks the caller uid for every implemented operation. A non-admin caller
 may:
 
-- activate a profile whose `owner_uid` matches the caller;
-- deactivate an active connection owned by the caller;
-- call `Device.Disconnect()` for an active connection owned by the caller;
-- call `GetSecrets()` for a profile owned by the caller;
-- call `AddAndActivateConnection[2]`, which creates a profile owned by the
-  caller and then activates it;
+- activate a system-level Wi-Fi profile (all Wi-Fi profiles now live in
+  `wpa_supplicant.conf`);
+- deactivate an active Wi-Fi connection;
+- call `Device.Disconnect()` for an active Wi-Fi connection;
+- call `GetSecrets()` for a system-level Wi-Fi profile;
+- call `AddAndActivateConnection[2]`;
 - read manager/device/AP properties, list settings without secrets, and scan.
 
-Profile creation and `Update`/`Delete` are allowed for the profile owner or
-an administrator; `Enable`, `Sleep` and machine-wide operations still require
-`wheel`/`network`. A legacy profile
-with no `owner_uid` is administrator-only. The D-Bus policy allows the
+Wi-Fi profile creation and `Update`/`Delete` are system-level after the
+migration; `Enable`, `Sleep` and machine-wide operations still require
+`wheel`/`network`. Ethernet profiles keep the owner/admin rule. The D-Bus policy allows the
 owner-routed calls through; the daemon performs the owner/admin decision.
 
 There is still no polkit and no SecretAgent. `GetPermissions` is coarse: it
