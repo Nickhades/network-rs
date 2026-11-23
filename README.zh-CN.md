@@ -40,8 +40,8 @@
 
 ## 版本历史
 
-- **v0.2.10 / main** — owner/admin 激活、断开与 settings 写入、owner 范围的
-  <code>GetSecrets</code>、隐藏 SSID、频段/doctor 诊断，以及 DHCP 客户端冲突检测。
+- **v0.2.11 / main** — 前端统一适配：频段标签、已保存 profile 删除，以及
+  CLI profile 查看/删除，底层使用 owner 范围的后端写入权限。
   本文档描述当前代码。
 - 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
   历史说明见 GitHub releases。
@@ -208,6 +208,8 @@ XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
     nm-freebsd-cli status
     nm-freebsd-cli devices
     nm-freebsd-cli connections
+    nm-freebsd-cli connections --show <uuid>
+    nm-freebsd-cli connections --delete <uuid>
     nm-freebsd-cli wifi list --scan
     nm-freebsd-cli doctor
     nm-freebsd-cli wifi connect "云涧" --password '...'

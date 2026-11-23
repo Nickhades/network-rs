@@ -23,6 +23,9 @@ const NM_PATH = '/org/freedesktop/NetworkManager';
 const DEVICE_IFACE = NM + '.Device';
 const WIRELESS_IFACE = NM + '.Device.Wireless';
 const AP_IFACE = NM + '.AccessPoint';
+const SETTINGS_IFACE = NM + '.Settings';
+const SETTINGS_CONNECTION_IFACE = NM + '.Settings.Connection';
+const SETTINGS_PATH = NM_PATH + '/Settings';
 
 const PROXY_FLAGS = Gio.DBusProxyFlags.NONE;
 const CALL_FLAGS = Gio.DBusCallFlags.NONE;
@@ -30,6 +33,16 @@ const CALL_TIMEOUT = 15000;
 
 function stringVariant(value) {
     return new GLib.Variant('s', value);
+}
+
+function bandLabel(frequency) {
+    if (frequency >= 2400 && frequency <= 2500)
+        return '2.4G';
+    if (frequency >= 4900 && frequency <= 5924)
+        return '5G';
+    if (frequency >= 5925 && frequency <= 7125)
+        return '6G';
+    return '';
 }
 
 function signalIcon(strength) {
@@ -61,6 +74,12 @@ function uuid() {
             return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
         });
     }
+}
+
+function unpack(value) {
+    return value && typeof value.deep_unpack === 'function'
+        ? value.deep_unpack()
+        : value;
 }
 
 function callAsync(proxy, method, params = null, timeout = CALL_TIMEOUT) {
@@ -100,6 +119,7 @@ class NmIndicator extends PanelMenu.Button {
         this._wifiPath = null;
         this._wifiDevice = null;
         this._proxies = new Map();
+        this._profiles = [];
         this._refreshSource = 0;
         this._refreshGeneration = 0;
         this._dialog = null;
@@ -182,9 +202,12 @@ class NmIndicator extends PanelMenu.Button {
             const flags = Number(this._property(ap, 'Flags') ?? 0);
             const wpa = Number(this._property(ap, 'WpaFlags') ?? 0);
             const rsn = Number(this._property(ap, 'RsnFlags') ?? 0);
+            const frequency = Number(this._property(ap, 'Frequency') ?? 0);
             return {
                 path,
                 ssid: ssidToString(ssidBytes),
+                frequency,
+                band: bandLabel(frequency),
                 strength: Number(this._property(ap, 'Strength') ?? 0),
                 secure: (flags & 1) !== 0 || wpa !== 0 || rsn !== 0,
             };
@@ -241,7 +264,10 @@ class NmIndicator extends PanelMenu.Button {
                     return 1;
                 return b.strength - a.strength;
             });
-            this._render(entries, activePath);
+            const profiles = await this._profilesInfo();
+            if (generation !== this._refreshGeneration)
+                return;
+            this._render(entries, activePath, profiles);
         } catch (error) {
             if (generation === this._refreshGeneration)
                 this._reportError(error);
@@ -303,11 +329,15 @@ class NmIndicator extends PanelMenu.Button {
             existing.bssids++;
             if (active) {
                 existing.path = info.path;
+                existing.frequency = info.frequency;
+                existing.band = info.band;
                 existing.strength = info.strength;
                 existing.secure = info.secure;
                 existing.active = true;
             } else if (!existing.active && info.strength > existing.strength) {
                 existing.path = info.path;
+                existing.frequency = info.frequency;
+                existing.band = info.band;
                 existing.strength = info.strength;
                 existing.secure = info.secure;
             }
@@ -315,7 +345,42 @@ class NmIndicator extends PanelMenu.Button {
         return Array.from(grouped.values());
     }
 
-    _render(entries, activePath) {
+    async _profilesInfo() {
+        try {
+            const settings = await this._proxy(SETTINGS_PATH, SETTINGS_IFACE);
+            const reply = await callAsync(settings, 'ListConnections');
+            const paths = reply.deep_unpack()[0] ?? [];
+            const profiles = await Promise.all(paths.map(async path => {
+                try {
+                    const profile = await this._proxy(
+                        path, SETTINGS_CONNECTION_IFACE);
+                    const reply = await callAsync(profile, 'GetSettings');
+                    const values = unpack(reply)[0] ?? {};
+                    const connection = unpack(values.connection) ?? {};
+                    const id = String(unpack(connection.id) ?? path);
+                    return {path, id};
+                } catch {
+                    return null;
+                }
+            }));
+            return profiles.filter(profile => profile !== null)
+                .sort((a, b) => a.id.localeCompare(b.id));
+        } catch {
+            return [];
+        }
+    }
+
+    async _deleteProfile(path) {
+        try {
+            const profile = await this._proxy(path, SETTINGS_CONNECTION_IFACE);
+            await callAsync(profile, 'Delete');
+            this._queueRefresh(250);
+        } catch (error) {
+            this._reportError(error);
+        }
+    }
+
+    _render(entries, activePath, profiles = []) {
         const active = entries.find(info => info.active || info.path === activePath);
         this._label.set_text(active ? 'Wi-Fi: ' + active.ssid : 'Wi-Fi');
         this._icon.set_icon_name(active
@@ -332,11 +397,26 @@ class NmIndicator extends PanelMenu.Button {
         } else {
             for (const info of entries) {
                 const prefix = info.active || info.path === activePath ? '\u2713 ' : '';
-                const suffix = (info.secure ? '  \u{1F512}' : '') +
+                const band = info.band ? '  ' + info.band : '';
+                const suffix = band + (info.secure ? '  \u{1F512}' : '') +
                     (info.bssids > 1 ? '  (' + info.bssids + ')' : '');
                 const item = new PopupMenu.PopupMenuItem(
                     prefix + info.ssid + suffix);
                 item.connect('activate', () => this._selectAccessPoint(info));
+                this.menu.addMenuItem(item);
+            }
+        }
+
+        if (profiles.length > 0) {
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            this._addHeader('Saved connections');
+            for (const profile of profiles) {
+                const item = new PopupMenu.PopupMenuItem(
+                    'Forget: ' + profile.id);
+                item.connect('activate', () => {
+                    this._deleteProfile(profile.path)
+                        .catch(error => this._reportError(error));
+                });
                 this.menu.addMenuItem(item);
             }
         }

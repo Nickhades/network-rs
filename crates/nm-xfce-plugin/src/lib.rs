@@ -84,6 +84,31 @@ trait AccessPoint {
     fn strength(&self) -> zbus::Result<u8>;
     #[zbus(property)]
     fn flags(&self) -> zbus::Result<u32>;
+    #[zbus(property)]
+    fn frequency(&self) -> zbus::Result<u32>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Settings",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/org/freedesktop/NetworkManager/Settings"
+)]
+trait Settings {
+    fn list_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Settings.Connection",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/"
+)]
+trait SettingsConnection {
+    fn get_settings(
+        &self,
+    ) -> zbus::Result<
+        std::collections::HashMap<String, std::collections::HashMap<String, OwnedVariant>>,
+    >;
+    fn delete(&self) -> zbus::Result<()>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -91,14 +116,40 @@ struct Snapshot {
     manager_state: u32,
     connected_ssid: Option<String>,
     aps: Vec<ApInfo>,
+    profiles: Vec<ProfileInfo>,
 }
 
 #[derive(Debug, Clone)]
 struct ApInfo {
     ssid: Vec<u8>,
     label: String,
+    band: String,
     strength: u8,
     privacy: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ProfileInfo {
+    path: OwnedObjectPath,
+    id: String,
+}
+
+fn band_label(frequency: u32) -> String {
+    match frequency {
+        2400..=2500 => "2.4G".to_string(),
+        4900..=5924 => "5G".to_string(),
+        5925..=7125 => "6G".to_string(),
+        _ => String::new(),
+    }
+}
+
+fn variant_string(
+    map: &std::collections::HashMap<String, OwnedVariant>,
+    key: &str,
+) -> Option<String> {
+    map.get(key)
+        .and_then(|value| value.try_clone().ok())
+        .and_then(|value| String::try_from(value).ok())
 }
 
 #[derive(Debug)]
@@ -106,6 +157,7 @@ enum Request {
     Refresh,
     Rescan,
     Connect { ssid: Vec<u8>, psk: Option<String> },
+    DeleteProfile(OwnedObjectPath),
     Disconnect,
     Shutdown,
 }
@@ -199,9 +251,11 @@ impl BusClient {
             let label = ssid_to_string(&ssid);
             let strength = ap.strength().await.unwrap_or(0);
             let privacy = ap.flags().await.unwrap_or(0) & 1 == 1;
+            let band = band_label(ap.frequency().await.unwrap_or(0));
             let info = ApInfo {
                 ssid,
                 label,
+                band,
                 strength,
                 privacy,
             };
@@ -218,11 +272,50 @@ impl BusClient {
         aps.sort_by_key(|ap| std::cmp::Reverse(ap.strength));
         aps.truncate(16);
 
+        let mut profiles = Vec::new();
+        if let Ok(settings) = SettingsProxy::new(&self.connection).await
+            && let Ok(paths) = settings.list_connections().await
+        {
+            for path in paths.into_iter().take(32) {
+                let Ok(profile) = SettingsConnectionProxy::builder(&self.connection)
+                    .path(path.clone())
+                    .build()
+                    .await
+                else {
+                    continue;
+                };
+                let Ok(values) = profile.get_settings().await else {
+                    continue;
+                };
+                let Some(connection) = values.get("connection") else {
+                    continue;
+                };
+                let Some(id) = variant_string(connection, "id") else {
+                    continue;
+                };
+                profiles.push(ProfileInfo { path, id });
+            }
+        }
+        profiles.sort_by(|a, b| a.id.cmp(&b.id));
+
         Ok(Snapshot {
             manager_state,
             connected_ssid,
             aps,
+            profiles,
         })
+    }
+
+    async fn delete_profile(&self, path: &OwnedObjectPath) -> Result<(), String> {
+        let profile = SettingsConnectionProxy::builder(&self.connection)
+            .path(path.clone())
+            .build()
+            .await
+            .map_err(|error| format!("profile proxy: {error}"))?;
+        profile
+            .delete()
+            .await
+            .map_err(|error| format!("delete profile: {error}"))
     }
 
     async fn rescan(&self) -> Result<(), String> {
@@ -424,10 +517,15 @@ impl Ui {
         menu.append(&header);
 
         for ap in &snapshot.aps {
-            let label = if ap.privacy {
-                format!("{}  {}%  locked", ap.label, ap.strength)
+            let band = if ap.band.is_empty() {
+                String::new()
             } else {
-                format!("{}  {}%", ap.label, ap.strength)
+                format!("  {}", ap.band)
+            };
+            let label = if ap.privacy {
+                format!("{}{}  {}%  locked", ap.label, band, ap.strength)
+            } else {
+                format!("{}{}  {}%", ap.label, band, ap.strength)
             };
             let item = gtk::MenuItem::with_label(&label);
             let tx = self.tx.clone();
@@ -459,6 +557,22 @@ impl Ui {
             empty.set_sensitive(false);
             menu.append(&empty);
             let _ = self.tx.send(Request::Rescan);
+        }
+
+        if !snapshot.profiles.is_empty() {
+            menu.append(&gtk::SeparatorMenuItem::new());
+            let header = gtk::MenuItem::with_label("Saved connections");
+            header.set_sensitive(false);
+            menu.append(&header);
+            for profile in &snapshot.profiles {
+                let item = gtk::MenuItem::with_label(&format!("Forget: {}", profile.id));
+                let tx = self.tx.clone();
+                let path = profile.path.clone();
+                item.connect_activate(move |_| {
+                    let _ = tx.send(Request::DeleteProfile(path.clone()));
+                });
+                menu.append(&item);
+            }
         }
 
         menu.append(&gtk::SeparatorMenuItem::new());
@@ -632,6 +746,24 @@ async fn worker_loop(rx: Receiver<Request>, ui_tx: Sender<UiEvent>) {
                 let result = async {
                     let client = BusClient::connect().await?;
                     client.connect_to(&ssid, psk.as_deref()).await?;
+                    client.snapshot().await
+                }
+                .await;
+                match result {
+                    Ok(snapshot) => {
+                        let _ = ui_tx.send(UiEvent::Snapshot(snapshot));
+                    }
+                    Err(error) => {
+                        let _ = ui_tx.send(UiEvent::Error(error));
+                    }
+                }
+                let _ = ui_tx.send(UiEvent::Busy(false));
+            }
+            Request::DeleteProfile(path) => {
+                let _ = ui_tx.send(UiEvent::Busy(true));
+                let result = async {
+                    let client = BusClient::connect().await?;
+                    client.delete_profile(&path).await?;
                     client.snapshot().await
                 }
                 .await;

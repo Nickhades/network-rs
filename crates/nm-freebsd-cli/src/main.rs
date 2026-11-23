@@ -33,8 +33,15 @@ enum Command {
     Status,
     /// List devices.
     Devices,
-    /// List saved connection profiles.
-    Connections,
+    /// List, show or delete saved connection profiles.
+    Connections {
+        /// Delete the profile matching this path, UUID or id.
+        #[arg(long)]
+        delete: Option<String>,
+        /// Show the settings of the profile matching this path, UUID or id.
+        #[arg(long)]
+        show: Option<String>,
+    },
     /// Diagnose interfaces, visible bands and driver capabilities.
     Doctor,
     /// Wi-Fi operations.
@@ -157,6 +164,16 @@ trait Settings {
     fn list_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 }
 
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Settings.Connection",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/"
+)]
+trait SettingsConnection {
+    fn get_settings(&self) -> zbus::Result<SettingsMap>;
+    fn delete(&self) -> zbus::Result<()>;
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -170,7 +187,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Status => status(&conn, &manager).await?,
         Command::Devices => devices(&conn, &manager).await?,
-        Command::Connections => connections(&conn).await?,
+        Command::Connections { delete, show } => {
+            connections(&conn, delete.as_deref(), show.as_deref()).await?
+        }
         Command::Doctor => doctor(&conn, &manager).await?,
         Command::Wifi { command } => match command {
             WifiCommand::List { scan } => wifi_list(&conn, &manager, scan).await?,
@@ -249,12 +268,54 @@ async fn devices(conn: &Connection, manager: &ManagerProxy<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn connections(conn: &Connection) -> Result<()> {
+fn setting_string(settings: &SettingsMap, section: &str, key: &str) -> Option<String> {
+    settings
+        .get(section)
+        .and_then(|values| values.get(key))
+        .and_then(|value| value.try_clone().ok())
+        .and_then(|value| String::try_from(value).ok())
+}
+
+async fn connections(conn: &Connection, delete: Option<&str>, show: Option<&str>) -> Result<()> {
     let settings = SettingsProxy::new(conn).await?;
     let paths = settings.list_connections().await?;
-    println!("{} saved connection(s)", paths.len());
+    let count = paths.len();
+    let selector = delete.or(show);
+    let mut matched = 0;
     for path in paths {
-        println!("{path}");
+        let profile = SettingsConnectionProxy::builder(conn)
+            .path(path.clone())
+            .build()
+            .await?;
+        let values = profile.get_settings().await?;
+        let id = setting_string(&values, "connection", "id").unwrap_or_default();
+        let uuid = setting_string(&values, "connection", "uuid").unwrap_or_default();
+        let is_match = match selector {
+            None => false,
+            Some(selector) => selector == path.as_str() || selector == uuid || selector == id,
+        };
+        if selector.is_none() {
+            println!("{id:32} {uuid}  {path}");
+            continue;
+        }
+        if !is_match {
+            continue;
+        }
+        matched += 1;
+        if show.is_some() {
+            println!("{id} ({uuid}) {path}");
+            println!("{values:#?}");
+        }
+        if delete.is_some() {
+            profile.delete().await?;
+            println!("deleted {id} ({uuid})");
+        }
+    }
+    if selector.is_some() && matched == 0 {
+        return Err(anyhow!("no profile matched the selector"));
+    }
+    if selector.is_none() {
+        println!("{count} saved connection(s)");
     }
     Ok(())
 }

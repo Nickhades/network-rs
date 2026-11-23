@@ -53,10 +53,9 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.2.10 / main** — owner/admin activation, disconnection and settings
-  writes, owner-scoped `GetSecrets`, hidden SSID profiles, band
-  display/doctor, and DHCP-client conflict detection. This document describes
-  the current tree.
+- **v0.2.11 / main** — unified frontend alignment: band labels, saved-profile
+  deletion, and CLI profile show/delete on top of owner-scoped backend writes.
+  This document describes the current tree.
 - Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
   GitHub releases page for their historical notes.
 
@@ -257,6 +256,8 @@ it does not open wpa_supplicant sockets or run DHCP itself.
 nm-freebsd-cli status
 nm-freebsd-cli devices
 nm-freebsd-cli connections
+nm-freebsd-cli connections --show <uuid>
+nm-freebsd-cli connections --delete <uuid>
 nm-freebsd-cli wifi list --scan
 nm-freebsd-cli doctor
 nm-freebsd-cli wifi connect "Cafe WiFi" --password 'secret'
