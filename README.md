@@ -64,8 +64,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
   historical.
 - **v0.2.4** — aggregate multiple BSSIDs per SSID in the CLI and GNOME
   extension; daemon keeps the standard one-AP-per-BSSID contract; historical.
-- **v0.2.5 / main** — per-SSID band display, `nm-freebsd-cli doctor`, and a
-  documented hardware/band support matrix.
+- **v0.2.5** — per-SSID band display, `nm-freebsd-cli doctor`, and a
+  documented hardware/band support matrix; historical.
+- **v0.2.6 / main** — hidden SSID profile support
+  (`802-11-wireless.hidden`) and `nm-freebsd-cli wifi connect --hidden`.
 
 ## Status
 
@@ -267,6 +269,7 @@ nm-freebsd-cli connections
 nm-freebsd-cli wifi list --scan
 nm-freebsd-cli doctor
 nm-freebsd-cli wifi connect "Cafe WiFi" --password 'secret'
+nm-freebsd-cli wifi connect "Hidden WiFi" --password 'secret' --hidden
 nm-freebsd-cli disconnect
 ```
 

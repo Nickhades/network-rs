@@ -711,3 +711,63 @@ async fn adopts_existing_wpa_connection() {
     };
     assert_eq!(active_connection, active_paths[0]);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hidden_wifi_activation_requests_scan_ssid() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: private dbus-daemon is not available");
+        return;
+    };
+    let fake = FakeWpa::start().expect("fake wpa_supplicant");
+    let state_dir = tempfile::tempdir().expect("state dir");
+    let mut config = Config::for_tests(fake.wpa_dir(), state_dir.path().to_path_buf());
+    config.bus_address = Some(bus.address.clone());
+    config.include_wired = false;
+    config.initial_scan = false;
+
+    let _running = daemon::start(config).await.expect("daemon starts");
+    let conn = connect(&bus.address).await;
+    let manager = ManagerProxy::new(&conn).await.expect("manager proxy");
+    let (device_path, _device) = loop {
+        if let Some(pair) = wifi_device(&conn).await {
+            break pair;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
+    let mut connection = HashMap::new();
+    connection.insert("id".to_string(), owned("Hidden Net".to_string()));
+    connection.insert("uuid".to_string(), owned(uuid::Uuid::new_v4().to_string()));
+    connection.insert("type".to_string(), owned("802-11-wireless".to_string()));
+    let mut wireless = HashMap::new();
+    wireless.insert("ssid".to_string(), owned(b"Hidden Net".to_vec()));
+    wireless.insert("mode".to_string(), owned("infrastructure".to_string()));
+    wireless.insert("hidden".to_string(), owned(true));
+    let mut settings = HashMap::new();
+    settings.insert("connection".to_string(), connection);
+    settings.insert("802-11-wireless".to_string(), wireless);
+
+    manager
+        .add_and_activate_connection(
+            settings,
+            device_path,
+            OwnedObjectPath::try_from("/").unwrap(),
+        )
+        .await
+        .expect("hidden activation starts");
+
+    let requested = wait_for(Duration::from_secs(5), || {
+        let commands = fake.commands();
+        async move {
+            commands
+                .iter()
+                .any(|command| command.contains("scan_ssid 1"))
+        }
+    })
+    .await;
+    assert!(
+        requested,
+        "hidden activation did not set scan_ssid: {:?}",
+        fake.commands()
+    );
+}

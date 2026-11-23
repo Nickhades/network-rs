@@ -60,7 +60,8 @@ compat.linuxkpi.rtw89_support_eht = 0
 - 运行时探测接口，不要只硬编码 `wlan0`。
 - 明确报告不支持的频段，而不是静默隐藏网络。
 - Wi-Fi 受限时，保留 Ethernet/USB 共享网络可用。
-- 隐藏 SSID 应作为显式 profile 功能；普通扫描无法列出不广播的网络。
+- 隐藏 SSID 使用显式 profile（`802-11-wireless.hidden=true`）和
+  <code>nm-freebsd-cli wifi connect --hidden</code>；普通扫描无法列出不广播的网络。
 - 在实际用户使用的 FreeBSD 版本和 firmware 上测试。
 
 ## 项目能做与不能做

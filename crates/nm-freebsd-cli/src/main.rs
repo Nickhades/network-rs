@@ -63,6 +63,9 @@ enum WifiCommand {
         ssid: String,
         #[arg(long)]
         password: Option<String>,
+        /// SSID is not broadcast; tell wpa_supplicant to probe for it.
+        #[arg(long)]
+        hidden: bool,
     },
 }
 
@@ -171,9 +174,11 @@ async fn main() -> Result<()> {
         Command::Doctor => doctor(&conn, &manager).await?,
         Command::Wifi { command } => match command {
             WifiCommand::List { scan } => wifi_list(&conn, &manager, scan).await?,
-            WifiCommand::Connect { ssid, password } => {
-                wifi_connect(&conn, &manager, &ssid, password.as_deref()).await?
-            }
+            WifiCommand::Connect {
+                ssid,
+                password,
+                hidden,
+            } => wifi_connect(&conn, &manager, &ssid, password.as_deref(), hidden).await?,
         },
         Command::Disconnect { interface } => {
             disconnect(&conn, &manager, interface.as_deref()).await?
@@ -519,14 +524,24 @@ async fn wifi_connect(
     manager: &ManagerProxy<'_>,
     ssid: &str,
     password: Option<&str>,
+    hidden: bool,
 ) -> Result<()> {
     let (device_path, _device, wireless) = wifi_device(conn, manager).await?;
-    let aps = access_points(conn, &wireless).await?;
-    let Some(ap) = aps.into_iter().find(|ap| ap.ssid == ssid) else {
-        return Err(anyhow!("SSID {ssid:?} was not found; run wifi list --scan"));
+    let (ap_path, secure) = if hidden {
+        // A hidden SSID is absent from the scan, so activate against the
+        // device with an empty specific object and let the profile set
+        // scan_ssid=1 in wpa_supplicant.
+        (OwnedObjectPath::try_from("/")?, false)
+    } else {
+        let aps = access_points(conn, &wireless).await?;
+        let Some(ap) = aps.into_iter().find(|ap| ap.ssid == ssid) else {
+            return Err(anyhow!(
+                "SSID {ssid:?} was not found; run wifi list --scan, or use --hidden"
+            ));
+        };
+        (ap.path, ap.secure)
     };
-    let ap_path = ap.path;
-    if ap.secure && password.is_none() {
+    if !hidden && secure && password.is_none() {
         return Err(anyhow!("SSID {ssid:?} requires --password"));
     }
 
@@ -538,6 +553,7 @@ async fn wifi_connect(
     let mut wireless_setting = HashMap::new();
     wireless_setting.insert("ssid".to_string(), owned(ssid.as_bytes().to_vec()));
     wireless_setting.insert("mode".to_string(), owned("infrastructure".to_string()));
+    wireless_setting.insert("hidden".to_string(), owned(hidden));
 
     let mut settings = HashMap::new();
     settings.insert("connection".to_string(), connection);

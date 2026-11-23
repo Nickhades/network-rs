@@ -36,6 +36,8 @@ pub struct StoredProfile {
     pub psk: Option<String>,
     #[serde(default)]
     pub key_mgmt: Option<String>,
+    #[serde(default)]
+    pub hidden: bool,
     #[serde(default = "default_true")]
     pub autoconnect: bool,
     #[serde(default)]
@@ -169,6 +171,7 @@ pub struct ProfileDraft {
     pub ssid: Vec<u8>,
     pub psk: Option<String>,
     pub key_mgmt: Option<String>,
+    pub hidden: bool,
     pub autoconnect: bool,
     pub timestamp: u64,
 }
@@ -254,6 +257,7 @@ pub fn parse_settings(
     let mut ssid = Vec::new();
     let mut psk = existing.and_then(|p| p.psk.clone());
     let mut key_mgmt = existing.and_then(|p| p.key_mgmt.clone());
+    let mut hidden = existing.map(|p| p.hidden).unwrap_or(false);
     let mut ifname = existing.and_then(|p| p.ifname.clone());
 
     match kind {
@@ -269,6 +273,9 @@ pub fn parse_settings(
             }
             if ssid.len() > 32 {
                 return Err("SSID is longer than 32 bytes".to_string());
+            }
+            if let Some(value) = get_bool(wireless, "hidden") {
+                hidden = value;
             }
             if let Some(security) = settings.get("802-11-wireless-security") {
                 if let Some(value) = get_string(security, "key-mgmt") {
@@ -321,6 +328,7 @@ pub fn parse_settings(
         ssid,
         psk,
         key_mgmt,
+        hidden,
         autoconnect,
         timestamp,
     })
@@ -345,6 +353,7 @@ pub fn profile_to_settings(profile: &ConnectionProfile, include_secrets: bool) -
             let mut wireless = HashMap::new();
             wireless.insert("ssid".to_string(), owned(profile.ssid.clone()));
             wireless.insert("mode".to_string(), owned("infrastructure".to_string()));
+            wireless.insert("hidden".to_string(), owned(profile.hidden));
             if profile.psk.is_some() {
                 wireless.insert(
                     "security".to_string(),
@@ -546,6 +555,7 @@ impl StoredProfile {
             ssid: draft.ssid.clone(),
             psk: draft.psk.clone(),
             key_mgmt: draft.key_mgmt.clone(),
+            hidden: draft.hidden,
             autoconnect: draft.autoconnect,
             timestamp: draft.timestamp,
         }
@@ -605,6 +615,7 @@ mod tests {
             ssid: b"Cafe WiFi".to_vec(),
             psk: Some("oldsecret".into()),
             key_mgmt: Some("WPA-PSK".into()),
+            hidden: false,
             autoconnect: true,
             timestamp: 1,
         };
@@ -629,6 +640,7 @@ mod tests {
             ssid: draft.ssid.clone(),
             psk: draft.psk.clone(),
             key_mgmt: draft.key_mgmt.clone(),
+            hidden: true,
             autoconnect: true,
             timestamp: 1,
         };
@@ -647,6 +659,37 @@ mod tests {
         );
         let draft2 = parse_settings(&settings, None).unwrap();
         assert_eq!(draft2.uuid, profile.uuid);
+    }
+
+    #[test]
+    fn parses_hidden_ssid() {
+        let mut settings = wifi_settings();
+        settings
+            .get_mut("802-11-wireless")
+            .unwrap()
+            .insert("hidden".into(), owned(true));
+        let draft = parse_settings(&settings, None).unwrap();
+        assert!(draft.hidden);
+        let profile = ConnectionProfile {
+            path: "/x".try_into().unwrap(),
+            uuid: draft.uuid.clone(),
+            id: draft.id.clone(),
+            kind: draft.kind,
+            ifname: None,
+            ssid: draft.ssid.clone(),
+            psk: draft.psk.clone(),
+            key_mgmt: draft.key_mgmt.clone(),
+            hidden: draft.hidden,
+            autoconnect: true,
+            timestamp: 1,
+        };
+        assert_eq!(
+            get_bool(
+                &profile_to_settings(&profile, false)["802-11-wireless"],
+                "hidden"
+            ),
+            Some(true)
+        );
     }
 
     #[test]
@@ -682,6 +725,7 @@ mod tests {
             ssid: b"x".to_vec(),
             psk: None,
             key_mgmt: Some("NONE".into()),
+            hidden: false,
             autoconnect: true,
             timestamp: 0,
         };

@@ -64,8 +64,9 @@ rtw89 as a reliable 5GHz solution for downstream users.
 - Detect interfaces at runtime; never hard-code `wlan0` only.
 - Report unsupported bands explicitly instead of silently hiding networks.
 - Keep the daemon usable with Ethernet and USB tethering when Wi-Fi is limited.
-- Treat hidden SSIDs as an explicit profile feature; a normal scan cannot list
-  a non-beaconing network.
+- Hidden SSIDs use an explicit profile (`802-11-wireless.hidden=true`) and
+  `nm-freebsd-cli wifi connect --hidden`; a normal scan cannot list a
+  non-beaconing network.
 - Test on the FreeBSD release and firmware users will actually run.
 
 ## What the project can and cannot do

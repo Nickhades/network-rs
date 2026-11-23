@@ -642,6 +642,7 @@ impl Core {
             draft.ssid.clone(),
             draft.psk.clone(),
             draft.key_mgmt.clone(),
+            draft.hidden,
             draft.autoconnect,
             draft.timestamp,
         );
@@ -663,7 +664,8 @@ impl Core {
             if persist {
                 profile_store::save_profile(&self.config.state_dir, &stored)?;
             }
-            let (id, kind, ifname, ssid, psk, key_mgmt, autoconnect, timestamp) = profile_fields;
+            let (id, kind, ifname, ssid, psk, key_mgmt, hidden, autoconnect, timestamp) =
+                profile_fields;
             self.state.write().await.connections.insert(
                 path.clone(),
                 ConnectionProfile {
@@ -675,6 +677,7 @@ impl Core {
                     ssid,
                     psk,
                     key_mgmt,
+                    hidden,
                     autoconnect,
                     timestamp,
                 },
@@ -686,7 +689,8 @@ impl Core {
         let path = {
             let mut state = self.state.write().await;
             let path = state.next_connection_path();
-            let (id, kind, ifname, ssid, psk, key_mgmt, autoconnect, timestamp) = profile_fields;
+            let (id, kind, ifname, ssid, psk, key_mgmt, hidden, autoconnect, timestamp) =
+                profile_fields;
             state.connections.insert(
                 path.clone(),
                 ConnectionProfile {
@@ -698,6 +702,7 @@ impl Core {
                     ssid,
                     psk,
                     key_mgmt,
+                    hidden,
                     autoconnect,
                     timestamp,
                 },
@@ -798,6 +803,7 @@ impl Core {
             ssid: draft.ssid,
             psk: draft.psk,
             key_mgmt: draft.key_mgmt,
+            hidden: draft.hidden,
             autoconnect: draft.autoconnect,
             timestamp: draft.timestamp,
         };
@@ -1145,6 +1151,7 @@ impl Core {
             ssid: ap.ssid.clone(),
             psk: None,
             key_mgmt: Some(key_mgmt),
+            hidden: false,
             autoconnect: false,
             timestamp: unix_now(),
         };
@@ -1218,7 +1225,7 @@ impl Core {
             ssid: &profile.ssid,
             psk: profile.psk.as_deref(),
             key_mgmt: &key_mgmt,
-            hidden: false,
+            hidden: profile.hidden,
         };
         if let Err(error) = self.backend.connect(&request).await {
             tracing::warn!(%error, ifname, "wpa_supplicant connection failed");
@@ -2067,6 +2074,7 @@ impl Core {
                     ssid: status.ssid.clone(),
                     psk: None,
                     key_mgmt: status.key_mgmt.clone(),
+                    hidden: false,
                     autoconnect: true,
                     timestamp: unix_now(),
                 };
@@ -2801,6 +2809,7 @@ fn profile_from_stored(stored: &StoredProfile, path: OwnedObjectPath) -> Connect
         ssid: stored.ssid.clone(),
         psk: stored.psk.clone(),
         key_mgmt: stored.key_mgmt.clone(),
+        hidden: stored.hidden,
         autoconnect: stored.autoconnect,
         timestamp: stored.timestamp,
     }

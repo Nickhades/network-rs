@@ -48,8 +48,11 @@
   <code>nm-freebsd-cli</code>；历史存档。
 - **v0.2.4** — CLI 和 GNOME 扩展按 SSID 聚合多个 BSSID；
   daemon 仍保持标准的一 BSSID 一 AccessPoint 契约；历史存档。
-- **v0.2.5 / main** — 按 SSID 显示频段、<code>nm-freebsd-cli doctor</code>
-  诊断，以及硬件/频段支持矩阵。
+- **v0.2.5** — 按 SSID 显示频段、<code>nm-freebsd-cli doctor</code>
+  诊断，以及硬件/频段支持矩阵；历史存档。
+- **v0.2.6 / main** — 隐藏 SSID profile 支持
+  （<code>802-11-wireless.hidden</code>）和
+  <code>nm-freebsd-cli wifi connect --hidden</code>。
 
 ## 当前状态
 
@@ -216,6 +219,7 @@ XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
     nm-freebsd-cli wifi list --scan
     nm-freebsd-cli doctor
     nm-freebsd-cli wifi connect "云涧" --password '...'
+    nm-freebsd-cli wifi connect "隐藏网络" --password '...' --hidden
     nm-freebsd-cli disconnect
 
 如果 daemon 较旧、没有 <code>AddAndActivateConnection2</code>，CLI 会回退到

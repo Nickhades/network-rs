@@ -132,6 +132,7 @@ pub struct ConnectionProfile {
     pub ssid: Vec<u8>,
     pub psk: Option<String>,
     pub key_mgmt: Option<String>,
+    pub hidden: bool,
     pub autoconnect: bool,
     pub timestamp: u64,
 }
