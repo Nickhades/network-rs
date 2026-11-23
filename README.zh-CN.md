@@ -44,8 +44,10 @@
 - **v0.2.2** — NM 契约修复（Device.Disconnect、
   AddAndActivateConnection2）、ActiveConnection 接管、激活串行化/profile
   去重，以及 GNOME/XFCE 前端修复；历史存档。
-- **v0.2.3 / main** — 同一 NM D-Bus 契约上的瘦客户端
-  <code>nm-freebsd-cli</code>，以及安装/Port 集成。
+- **v0.2.3** — 同一 NM D-Bus 契约上的瘦客户端
+  <code>nm-freebsd-cli</code>；历史存档。
+- **v0.2.4 / main** — CLI 和 GNOME 扩展按 SSID 聚合多个 BSSID；
+  daemon 仍保持标准的一 BSSID 一 AccessPoint 契约。
 
 ## 当前状态
 

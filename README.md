@@ -60,8 +60,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 - **v0.2.2** — NM contract fixes (Device.Disconnect,
   AddAndActivateConnection2), ActiveConnection adoption, activation
   serialization/profile dedupe, and GNOME/XFCE frontend fixes; historical.
-- **v0.2.3 / main** — thin `nm-freebsd-cli` over the same NM D-Bus
-  contract, plus install/Port integration.
+- **v0.2.3** — thin `nm-freebsd-cli` over the same NM D-Bus contract;
+  historical.
+- **v0.2.4 / main** — aggregate multiple BSSIDs per SSID in the CLI and
+  GNOME extension; daemon keeps the standard one-AP-per-BSSID contract.
 
 ## Status
 

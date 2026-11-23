@@ -274,12 +274,18 @@ async fn wifi_device(
     Err(anyhow!("no Wi-Fi device"))
 }
 
-async fn access_points(
-    conn: &Connection,
-    wireless: &WirelessProxy<'_>,
-) -> Result<Vec<(OwnedObjectPath, String, u8, bool)>> {
+struct ApInfo {
+    path: OwnedObjectPath,
+    ssid: String,
+    strength: u8,
+    secure: bool,
+    active: bool,
+    bssids: usize,
+}
+
+async fn access_points(conn: &Connection, wireless: &WirelessProxy<'_>) -> Result<Vec<ApInfo>> {
     let active = wireless.active_access_point().await.ok();
-    let mut result = Vec::new();
+    let mut by_ssid: HashMap<String, ApInfo> = HashMap::new();
     for path in wireless.get_all_access_points().await? {
         let ap = AccessPointProxy::builder(conn)
             .path(path.clone())
@@ -289,15 +295,41 @@ async fn access_points(
         let flags = ap.flags().await.unwrap_or(0);
         let wpa = ap.wpa_flags().await.unwrap_or(0);
         let rsn = ap.rsn_flags().await.unwrap_or(0);
-        result.push((
-            path,
-            ssid,
-            ap.strength().await.unwrap_or(0),
-            (flags & 1) != 0 || wpa != 0 || rsn != 0,
-        ));
+        let strength = ap.strength().await.unwrap_or(0);
+        let secure = (flags & 1) != 0 || wpa != 0 || rsn != 0;
+        let is_active = active.as_ref().map(|p| p == &path).unwrap_or(false);
+
+        match by_ssid.get_mut(&ssid) {
+            Some(existing) => {
+                existing.bssids += 1;
+                if is_active {
+                    existing.path = path;
+                    existing.strength = strength;
+                    existing.secure = secure;
+                    existing.active = true;
+                } else if !existing.active && strength > existing.strength {
+                    existing.path = path;
+                    existing.strength = strength;
+                    existing.secure = secure;
+                }
+            }
+            None => {
+                by_ssid.insert(
+                    ssid.clone(),
+                    ApInfo {
+                        path,
+                        ssid,
+                        strength,
+                        secure,
+                        active: is_active,
+                        bssids: 1,
+                    },
+                );
+            }
+        }
     }
-    result.sort_by_key(|a| std::cmp::Reverse(a.2));
-    let _ = active;
+    let mut result: Vec<_> = by_ssid.into_values().collect();
+    result.sort_by_key(|ap| (std::cmp::Reverse(ap.active), std::cmp::Reverse(ap.strength)));
     Ok(result)
 }
 
@@ -307,9 +339,13 @@ async fn wifi_list(conn: &Connection, manager: &ManagerProxy<'_>, scan: bool) ->
         wireless.request_scan(HashMap::new()).await?;
         tokio::time::sleep(Duration::from_millis(1500)).await;
     }
-    for (_path, ssid, strength, secure) in access_points(conn, &wireless).await? {
-        let lock = if secure { "locked" } else { "open" };
-        println!("{ssid:32} {strength:3}%  {lock}");
+    for ap in access_points(conn, &wireless).await? {
+        let lock = if ap.secure { "locked" } else { "open" };
+        let active = if ap.active { "  [active]" } else { "" };
+        println!(
+            "{:32} {:3}%  {:6}  {} BSSID(s){}",
+            ap.ssid, ap.strength, lock, ap.bssids, active
+        );
     }
     Ok(())
 }
@@ -322,12 +358,11 @@ async fn wifi_connect(
 ) -> Result<()> {
     let (device_path, _device, wireless) = wifi_device(conn, manager).await?;
     let aps = access_points(conn, &wireless).await?;
-    let Some((ap_path, _ssid, _strength, secure)) =
-        aps.into_iter().find(|(_, label, _, _)| label == ssid)
-    else {
+    let Some(ap) = aps.into_iter().find(|ap| ap.ssid == ssid) else {
         return Err(anyhow!("SSID {ssid:?} was not found; run wifi list --scan"));
     };
-    if secure && password.is_none() {
+    let ap_path = ap.path;
+    if ap.secure && password.is_none() {
         return Err(anyhow!("SSID {ssid:?} requires --password"));
     }
 

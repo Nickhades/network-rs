@@ -229,15 +229,15 @@ class NmIndicator extends PanelMenu.Button {
             const paths = reply.deep_unpack()[0] ?? [];
             const activePath = this._property(
                 this._wireless, 'ActiveAccessPoint') ?? '/';
-            const entries = (await Promise.all(paths.map(path => this._apInfo(path))))
+            const rawEntries = (await Promise.all(paths.map(path => this._apInfo(path))))
                 .filter(info => info !== null);
             if (generation !== this._refreshGeneration)
                 return;
-
+            const entries = this._groupEntries(rawEntries, activePath);
             entries.sort((a, b) => {
-                if (a.path === activePath && b.path !== activePath)
+                if (a.active && !b.active)
                     return -1;
-                if (b.path === activePath && a.path !== activePath)
+                if (b.active && !a.active)
                     return 1;
                 return b.strength - a.strength;
             });
@@ -287,8 +287,36 @@ class NmIndicator extends PanelMenu.Button {
         }
     }
 
+    _groupEntries(entries, activePath) {
+        const grouped = new Map();
+        for (const info of entries) {
+            const active = info.path === activePath;
+            const existing = grouped.get(info.ssid);
+            if (!existing) {
+                grouped.set(info.ssid, {
+                    ...info,
+                    active,
+                    bssids: 1,
+                });
+                continue;
+            }
+            existing.bssids++;
+            if (active) {
+                existing.path = info.path;
+                existing.strength = info.strength;
+                existing.secure = info.secure;
+                existing.active = true;
+            } else if (!existing.active && info.strength > existing.strength) {
+                existing.path = info.path;
+                existing.strength = info.strength;
+                existing.secure = info.secure;
+            }
+        }
+        return Array.from(grouped.values());
+    }
+
     _render(entries, activePath) {
-        const active = entries.find(info => info.path === activePath);
+        const active = entries.find(info => info.active || info.path === activePath);
         this._label.set_text(active ? 'Wi-Fi: ' + active.ssid : 'Wi-Fi');
         this._icon.set_icon_name(active
             ? signalIcon(active.strength)
@@ -303,8 +331,9 @@ class NmIndicator extends PanelMenu.Button {
                 new PopupMenu.PopupMenuItem('No networks found', {reactive: false}));
         } else {
             for (const info of entries) {
-                const prefix = info.path === activePath ? '\u2713 ' : '';
-                const suffix = info.secure ? '  \u{1F512}' : '';
+                const prefix = info.active || info.path === activePath ? '\u2713 ' : '';
+                const suffix = (info.secure ? '  \u{1F512}' : '') +
+                    (info.bssids > 1 ? '  (' + info.bssids + ')' : '');
                 const item = new PopupMenu.PopupMenuItem(
                     prefix + info.ssid + suffix);
                 item.connect('activate', () => this._selectAccessPoint(info));
