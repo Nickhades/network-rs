@@ -38,6 +38,8 @@ pub struct StoredProfile {
     pub key_mgmt: Option<String>,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default)]
+    pub owner_uid: Option<u32>,
     #[serde(default = "default_true")]
     pub autoconnect: bool,
     #[serde(default)]
@@ -172,6 +174,7 @@ pub struct ProfileDraft {
     pub psk: Option<String>,
     pub key_mgmt: Option<String>,
     pub hidden: bool,
+    pub owner_uid: Option<u32>,
     pub autoconnect: bool,
     pub timestamp: u64,
 }
@@ -259,6 +262,7 @@ pub fn parse_settings(
     let mut key_mgmt = existing.and_then(|p| p.key_mgmt.clone());
     let mut hidden = existing.map(|p| p.hidden).unwrap_or(false);
     let mut ifname = existing.and_then(|p| p.ifname.clone());
+    let owner_uid = existing.and_then(|p| p.owner_uid);
 
     match kind {
         ProfileKind::Wifi => {
@@ -329,6 +333,7 @@ pub fn parse_settings(
         psk,
         key_mgmt,
         hidden,
+        owner_uid,
         autoconnect,
         timestamp,
     })
@@ -556,6 +561,7 @@ impl StoredProfile {
             psk: draft.psk.clone(),
             key_mgmt: draft.key_mgmt.clone(),
             hidden: draft.hidden,
+            owner_uid: draft.owner_uid,
             autoconnect: draft.autoconnect,
             timestamp: draft.timestamp,
         }
@@ -616,6 +622,7 @@ mod tests {
             psk: Some("oldsecret".into()),
             key_mgmt: Some("WPA-PSK".into()),
             hidden: false,
+            owner_uid: None,
             autoconnect: true,
             timestamp: 1,
         };
@@ -641,6 +648,7 @@ mod tests {
             psk: draft.psk.clone(),
             key_mgmt: draft.key_mgmt.clone(),
             hidden: true,
+            owner_uid: Some(1001),
             autoconnect: true,
             timestamp: 1,
         };
@@ -680,6 +688,7 @@ mod tests {
             psk: draft.psk.clone(),
             key_mgmt: draft.key_mgmt.clone(),
             hidden: draft.hidden,
+            owner_uid: None,
             autoconnect: true,
             timestamp: 1,
         };
@@ -726,11 +735,24 @@ mod tests {
             psk: None,
             key_mgmt: Some("NONE".into()),
             hidden: false,
+            owner_uid: None,
             autoconnect: true,
             timestamp: 0,
         };
         assert!(save_profile(dir.path(), &stored).is_err());
     }
+    #[test]
+    fn owner_uid_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut draft = parse_settings(&wifi_settings(), None).unwrap();
+        draft.owner_uid = Some(1001);
+        let stored = StoredProfile::from_draft(&draft);
+        save_profile(dir.path(), &stored).unwrap();
+        let loaded = load_profiles(dir.path());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].owner_uid, Some(1001));
+    }
+
     #[test]
     fn persistence_roundtrip() {
         let dir = tempfile::tempdir().unwrap();

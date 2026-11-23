@@ -119,7 +119,7 @@ Access control has three layers:
    `org.freedesktop.DBus.GetConnectionUnixUser` and checks root or membership
    in those groups. Every mutating method implemented by the daemon calls
    `require_admin`; `GetPermissions` returns the same decision to frontends.
-   `GetSecrets` is admin-only.
+   `GetSecrets` allows the profile owner or an administrator.
 3. Saved PSKs live in `/var/db/nm-freebsd/keyring.json` (0600), separate from
    the 0600 profile JSON. Legacy plaintext `psk` fields are migrated on load.
    The keyring is not encrypted at rest; root can read it, so this is a

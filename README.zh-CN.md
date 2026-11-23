@@ -50,9 +50,12 @@
   daemon 仍保持标准的一 BSSID 一 AccessPoint 契约；历史存档。
 - **v0.2.5** — 按 SSID 显示频段、<code>nm-freebsd-cli doctor</code>
   诊断，以及硬件/频段支持矩阵；历史存档。
-- **v0.2.6 / main** — 隐藏 SSID profile 支持
+- **v0.2.6** — 隐藏 SSID profile 支持
   （<code>802-11-wireless.hidden</code>）和
-  <code>nm-freebsd-cli wifi connect --hidden</code>。
+  <code>nm-freebsd-cli wifi connect --hidden</code>；历史存档。
+- **v0.2.7 / main** — profile owner-uid 持久化，以及 owner/admin 的
+  <code>GetSecrets</code> 授权；D-Bus policy 不再在总线层拒绝所有非管理员，
+  由 daemon 做 owner 判定。
 
 ## 当前状态
 

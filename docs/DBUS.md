@@ -120,7 +120,8 @@ Signals: `NewConnection(o)`, `ConnectionRemoved(o)`.
 Path: `/org/freedesktop/NetworkManager/Settings/<counter>`
 
 - `GetSettings() -> a{sa{sv}}` (without secrets)
-- `GetSecrets(s service) -> a{sa{sv}}` (only the security subgroup)
+- `GetSecrets(s service) -> a{sa{sv}}` (only the security subgroup;
+  allowed for the profile owner or an administrator)
 - `Update(a{sa{sv}})`
 - `UpdateUnsaved(a{sa{sv}})`
 - `Delete()`
@@ -218,7 +219,7 @@ There is no `org.freedesktop.NetworkManager.SecretAgent` or `AgentManager`
 implementation; send the PSK in the settings dictionary (as the XFCE plugin
 does). Frontends that insist on an agent for WPA-PSK will need that follow-up
 work. Saved PSKs are read from the separate `keyring.json`; `GetSecrets`
-requires an administrator caller.
+allows the profile owner or an administrator.
 
 ## Manual inspection
 

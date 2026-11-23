@@ -133,6 +133,8 @@ pub struct ConnectionProfile {
     pub psk: Option<String>,
     pub key_mgmt: Option<String>,
     pub hidden: bool,
+    /// Unix uid that created the profile. None means legacy/system-owned.
+    pub owner_uid: Option<u32>,
     pub autoconnect: bool,
     pub timestamp: u64,
 }

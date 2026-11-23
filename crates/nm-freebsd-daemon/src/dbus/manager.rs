@@ -163,9 +163,9 @@ impl ManagerIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<(OwnedObjectPath, OwnedObjectPath)> {
-        auth::require_admin(bus, header, "AddAndActivateConnection").await?;
+        let owner_uid = auth::require_admin_uid(bus, header, "AddAndActivateConnection").await?;
         self.core
-            .add_and_activate(&connection, &device, &specific_object)
+            .add_and_activate(&connection, &device, &specific_object, Some(owner_uid))
             .await
             .map_err(Into::into)
     }
@@ -183,10 +183,10 @@ impl ManagerIface {
         OwnedObjectPath,
         HashMap<String, OwnedVariant>,
     )> {
-        auth::require_admin(bus, header, "AddAndActivateConnection2").await?;
+        let owner_uid = auth::require_admin_uid(bus, header, "AddAndActivateConnection2").await?;
         let (connection_path, active_path) = self
             .core
-            .add_and_activate(&connection, &device, &specific_object)
+            .add_and_activate(&connection, &device, &specific_object, Some(owner_uid))
             .await?;
         // The FreeBSD backend keeps profiles in its own state directory and
         // cannot promise an on-disk NetworkManager keyfile for every caller.

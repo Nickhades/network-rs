@@ -599,6 +599,17 @@ impl Core {
         ))
     }
 
+    pub async fn connection_owner_uid_by_uuid(&self, uuid: &str) -> Result<Option<u32>, CoreError> {
+        self.state
+            .read()
+            .await
+            .connections
+            .values()
+            .find(|profile| profile.uuid == uuid)
+            .map(|profile| profile.owner_uid)
+            .ok_or_else(|| CoreError::UnknownObject(uuid.to_string()))
+    }
+
     pub async fn connection_secrets_by_uuid(&self, uuid: &str) -> Result<SettingsMap, CoreError> {
         let profile = self
             .state
@@ -622,9 +633,11 @@ impl Core {
         self: &Arc<Self>,
         settings: SettingsMap,
         persist: bool,
+        owner_uid: Option<u32>,
     ) -> Result<OwnedObjectPath, CoreError> {
-        let draft =
+        let mut draft =
             profile_store::parse_settings(&settings, None).map_err(CoreError::InvalidArgs)?;
+        draft.owner_uid = owner_uid;
         self.add_connection(draft, persist).await
     }
 
@@ -634,7 +647,7 @@ impl Core {
         persist: bool,
     ) -> Result<OwnedObjectPath, CoreError> {
         let uuid = draft.uuid.clone();
-        let stored = StoredProfile::from_draft(&draft);
+        let mut stored = StoredProfile::from_draft(&draft);
         let profile_fields = (
             draft.id.clone(),
             draft.kind,
@@ -643,6 +656,7 @@ impl Core {
             draft.psk.clone(),
             draft.key_mgmt.clone(),
             draft.hidden,
+            draft.owner_uid,
             draft.autoconnect,
             draft.timestamp,
         );
@@ -658,14 +672,18 @@ impl Core {
                 .connections
                 .values()
                 .find(|profile| profile.uuid == uuid)
-                .map(|profile| profile.path.clone())
+                .map(|profile| (profile.path.clone(), profile.owner_uid))
         };
-        if let Some(path) = existing {
+        if let Some((path, existing_owner)) = existing {
+            if let Some(owner_uid) = existing_owner {
+                stored.owner_uid = Some(owner_uid);
+            }
             if persist {
                 profile_store::save_profile(&self.config.state_dir, &stored)?;
             }
-            let (id, kind, ifname, ssid, psk, key_mgmt, hidden, autoconnect, timestamp) =
+            let (id, kind, ifname, ssid, psk, key_mgmt, hidden, owner_uid, autoconnect, timestamp) =
                 profile_fields;
+            let owner_uid = existing_owner.or(owner_uid);
             self.state.write().await.connections.insert(
                 path.clone(),
                 ConnectionProfile {
@@ -678,6 +696,7 @@ impl Core {
                     psk,
                     key_mgmt,
                     hidden,
+                    owner_uid,
                     autoconnect,
                     timestamp,
                 },
@@ -689,7 +708,7 @@ impl Core {
         let path = {
             let mut state = self.state.write().await;
             let path = state.next_connection_path();
-            let (id, kind, ifname, ssid, psk, key_mgmt, hidden, autoconnect, timestamp) =
+            let (id, kind, ifname, ssid, psk, key_mgmt, hidden, owner_uid, autoconnect, timestamp) =
                 profile_fields;
             state.connections.insert(
                 path.clone(),
@@ -703,6 +722,7 @@ impl Core {
                     psk,
                     key_mgmt,
                     hidden,
+                    owner_uid,
                     autoconnect,
                     timestamp,
                 },
@@ -804,6 +824,7 @@ impl Core {
             psk: draft.psk,
             key_mgmt: draft.key_mgmt,
             hidden: draft.hidden,
+            owner_uid: draft.owner_uid,
             autoconnect: draft.autoconnect,
             timestamp: draft.timestamp,
         };
@@ -946,9 +967,11 @@ impl Core {
         settings: &SettingsMap,
         device: &OwnedObjectPath,
         specific: &OwnedObjectPath,
+        owner_uid: Option<u32>,
     ) -> Result<(OwnedObjectPath, OwnedObjectPath), CoreError> {
         let mut draft =
             profile_store::parse_settings(settings, None).map_err(CoreError::InvalidArgs)?;
+        draft.owner_uid = owner_uid;
         // Ad-hoc clients (including the XFCE plugin) generate a fresh UUID on
         // every click. Reuse the profile for the same SSID and update its
         // secret instead of accumulating one profile per attempt.
@@ -1152,6 +1175,7 @@ impl Core {
             psk: None,
             key_mgmt: Some(key_mgmt),
             hidden: false,
+            owner_uid: None,
             autoconnect: false,
             timestamp: unix_now(),
         };
@@ -2075,6 +2099,7 @@ impl Core {
                     psk: None,
                     key_mgmt: status.key_mgmt.clone(),
                     hidden: false,
+                    owner_uid: None,
                     autoconnect: true,
                     timestamp: unix_now(),
                 };
@@ -2810,6 +2835,7 @@ fn profile_from_stored(stored: &StoredProfile, path: OwnedObjectPath) -> Connect
         psk: stored.psk.clone(),
         key_mgmt: stored.key_mgmt.clone(),
         hidden: stored.hidden,
+        owner_uid: stored.owner_uid,
         autoconnect: stored.autoconnect,
         timestamp: stored.timestamp,
     }

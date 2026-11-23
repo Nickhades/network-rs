@@ -123,7 +123,8 @@
 路径：<code>/org/freedesktop/NetworkManager/Settings/&lt;counter&gt;</code>
 
 - <code>GetSettings() -> a{sa{sv}}</code>（不含密钥）
-- <code>GetSecrets(s service) -> a{sa{sv}}</code>（只返回安全子字典）
+- <code>GetSecrets(s service) -> a{sa{sv}}</code>（只返回安全子字典；
+  允许 profile owner 或管理员）
 - <code>Update(a{sa{sv}})</code>
 - <code>UpdateUnsaved(a{sa{sv}})</code>
 - <code>Delete()</code>
@@ -217,7 +218,7 @@ plasma-nm/GNOME 的一次扫描/连接通常映射为：
 本 MVP 没有实现 <code>org.freedesktop.NetworkManager.SecretAgent</code> 或
 <code>AgentManager</code>；请把 PSK 放在 settings 字典里（XFCE 插件就是这样做的）。
 强制要求 agent 的前端需要后续补上该功能。保存的 PSK 从独立的
-<code>keyring.json</code> 读取；<code>GetSecrets</code> 要求 caller 属于管理员组。
+<code>keyring.json</code> 读取；<code>GetSecrets</code> 允许 profile owner 或管理员。
 
 ## 手动检查
 

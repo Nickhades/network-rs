@@ -66,8 +66,12 @@ plasma-nm / GNOME network panel / XFCE panel plugin
   extension; daemon keeps the standard one-AP-per-BSSID contract; historical.
 - **v0.2.5** — per-SSID band display, `nm-freebsd-cli doctor`, and a
   documented hardware/band support matrix; historical.
-- **v0.2.6 / main** — hidden SSID profile support
-  (`802-11-wireless.hidden`) and `nm-freebsd-cli wifi connect --hidden`.
+- **v0.2.6** — hidden SSID profile support
+  (`802-11-wireless.hidden`) and `nm-freebsd-cli wifi connect --hidden`;
+  historical.
+- **v0.2.7 / main** — profile owner-uid persistence and owner/admin
+  `GetSecrets` authorization; the D-Bus policy lets the daemon decide rather
+  than rejecting every non-admin caller at the bus.
 
 ## Status
 

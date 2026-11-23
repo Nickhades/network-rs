@@ -625,11 +625,11 @@ dependencies = [
 
 [[package]]
 name = "nm-common"
-version = "0.2.6"
+version = "0.2.7"
 
 [[package]]
 name = "nm-dhcp-notify"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "tokio",
  "zbus",
@@ -637,7 +637,7 @@ dependencies = [
 
 [[package]]
 name = "nm-freebsd-cli"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "nm-freebsd-daemon"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "nm-xfce-plugin"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "futures-util",
  "nm-common",

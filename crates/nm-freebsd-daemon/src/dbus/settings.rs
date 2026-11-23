@@ -49,9 +49,9 @@ impl SettingsIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
-        auth::require_admin(bus, header, "AddConnection").await?;
+        let owner_uid = auth::require_admin_uid(bus, header, "AddConnection").await?;
         self.core
-            .add_connection_from_settings(connection, true)
+            .add_connection_from_settings(connection, true, Some(owner_uid))
             .await
             .map_err(Into::into)
     }
@@ -62,9 +62,9 @@ impl SettingsIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
-        auth::require_admin(bus, header, "AddConnectionUnsaved").await?;
+        let owner_uid = auth::require_admin_uid(bus, header, "AddConnectionUnsaved").await?;
         self.core
-            .add_connection_from_settings(connection, false)
+            .add_connection_from_settings(connection, false, Some(owner_uid))
             .await
             .map_err(Into::into)
     }
@@ -155,7 +155,12 @@ impl SettingsConnectionIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<SettingsMap> {
-        auth::require_admin(bus, header, "GetSecrets").await?;
+        let owner_uid = self
+            .core
+            .connection_owner_uid_by_uuid(&self.uuid)
+            .await
+            .map_err(fdo::Error::from)?;
+        auth::require_secret_access(bus, header, owner_uid, "GetSecrets").await?;
         self.core
             .connection_secrets_by_uuid(&self.uuid)
             .await

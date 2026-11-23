@@ -96,7 +96,7 @@ dispatcher 已经持有该接口的读锁，而处理函数又等待同一个对
 2. <code>auth.rs</code> 通过 <code>org.freedesktop.DBus.GetConnectionUnixUser</code>
    解析 caller 的 Unix uid，检查 root 或上述组成员资格。守护进程实现的每个修改类方法都调用
    <code>require_admin</code>；<code>GetPermissions</code> 把同样的判断返回给前端。
-   <code>GetSecrets</code> 只允许管理员。
+   <code>GetSecrets</code> 允许 profile owner 或管理员。
 3. 保存的 PSK 位于 <code>/var/db/nm-freebsd/keyring.json</code>（0600），与 0600 的
    profile JSON 分离。旧 profile 中的明文 <code>psk</code> 在加载时迁移。
    keyring 没有静态加密，root 可以读取；这是隔离/最小暴露措施，不是密钥保险库。

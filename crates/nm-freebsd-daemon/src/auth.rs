@@ -40,6 +40,54 @@ pub async fn caller_uid(connection: &Connection, header: Header<'_>) -> fdo::Res
     dbus.get_connection_unix_user(bus_name).await
 }
 
+pub async fn require_admin_uid(
+    connection: &Connection,
+    header: Header<'_>,
+    operation: &str,
+) -> fdo::Result<u32> {
+    let uid = caller_uid(connection, header).await?;
+    if is_admin_uid(uid) {
+        Ok(uid)
+    } else {
+        tracing::warn!(
+            uid,
+            operation,
+            "denied unprivileged NetworkManager operation"
+        );
+        Err(fdo::Error::AccessDenied(format!(
+            "{operation} requires membership in one of: {}",
+            ADMIN_GROUPS.join(", ")
+        )))
+    }
+}
+
+pub async fn require_secret_access(
+    connection: &Connection,
+    header: Header<'_>,
+    owner_uid: Option<u32>,
+    operation: &str,
+) -> fdo::Result<()> {
+    let uid = caller_uid(connection, header).await?;
+    if secret_access_allowed(uid, owner_uid, is_admin_uid(uid)) {
+        Ok(())
+    } else {
+        tracing::warn!(
+            uid,
+            ?owner_uid,
+            operation,
+            "denied secret access to a profile owned by another user"
+        );
+        Err(fdo::Error::AccessDenied(format!(
+            "{operation} requires the profile owner or an administrator"
+        )))
+    }
+}
+
+/// Pure owner/admin decision, kept separate from NSS for tests.
+pub fn secret_access_allowed(caller_uid: u32, owner_uid: Option<u32>, admin: bool) -> bool {
+    admin || owner_uid == Some(caller_uid)
+}
+
 pub async fn require_admin(
     connection: &Connection,
     header: Header<'_>,
@@ -219,6 +267,15 @@ mod tests {
     #[test]
     fn unrelated_group_is_not_admin() {
         assert!(!admin_from_groups(1001, 1001, &[1002], Some(0), Some(69)));
+    }
+
+    #[test]
+    fn secret_access_is_owner_or_admin() {
+        assert!(secret_access_allowed(1001, Some(1001), false));
+        assert!(!secret_access_allowed(1002, Some(1001), false));
+        assert!(!secret_access_allowed(1001, None, false));
+        assert!(secret_access_allowed(1002, Some(1001), true));
+        assert!(secret_access_allowed(0, None, true));
     }
 
     #[test]
