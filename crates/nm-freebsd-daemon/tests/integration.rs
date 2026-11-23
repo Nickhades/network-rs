@@ -65,6 +65,7 @@ trait ManagerState {
     default_path = "/"
 )]
 trait Device {
+    fn disconnect(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn device_type(&self) -> zbus::Result<u32>;
     #[zbus(property)]
@@ -598,10 +599,7 @@ async fn mvp_end_to_end() {
         Vec::<u8>::try_from(stored["802-11-wireless"]["ssid"].try_clone().unwrap()).unwrap();
     assert_eq!(stored_ssid, b"Cafe WiFi");
 
-    manager
-        .deactivate_connection(active_path.clone())
-        .await
-        .expect("deactivate");
+    device.disconnect().await.expect("Device.Disconnect");
     let disconnected = wait_for(Duration::from_secs(5), || {
         let manager_state = manager_state.clone();
         let device = device.clone();
@@ -648,4 +646,68 @@ async fn mvp_end_to_end() {
             .as_deref(),
         Some("10.99.0.2")
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adopts_existing_wpa_connection() {
+    let Some(bus) = PrivateBus::start() else {
+        eprintln!("skipping: private dbus-daemon is not available");
+        return;
+    };
+    let fake = FakeWpa::start().expect("fake wpa_supplicant");
+    let state_dir = tempfile::tempdir().expect("state dir");
+    let mut config = Config::for_tests(fake.wpa_dir(), state_dir.path().to_path_buf());
+    config.bus_address = Some(bus.address.clone());
+    config.include_wired = false;
+    config.initial_scan = false;
+
+    // Simulate wpa_supplicant having completed a connection before the daemon
+    // starts (for example an rc.conf reconnect at boot).
+    fake.selected.store(true, Ordering::SeqCst);
+    let _running = daemon::start(config).await.expect("daemon starts");
+    let conn = connect(&bus.address).await;
+    let manager = ManagerProxy::new(&conn).await.expect("manager proxy");
+    let manager_state = ManagerStateProxy::new(&conn)
+        .await
+        .expect("manager state proxy");
+
+    let adopted = wait_for(Duration::from_secs(10), || {
+        let manager = manager.clone();
+        async move {
+            manager
+                .active_connections()
+                .await
+                .map(|active| !active.is_empty())
+                .unwrap_or(false)
+        }
+    })
+    .await;
+    assert!(adopted, "existing wpa connection was not adopted");
+
+    let active_paths = manager.active_connections().await.unwrap();
+    let active = ActiveProxy::builder(&conn)
+        .path(active_paths[0].clone())
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(active.state().await.unwrap(), 2);
+    assert_eq!(manager_state.state().await.unwrap(), 60);
+
+    let (device_path, device) = wifi_device(&conn).await.expect("wifi device");
+    assert_eq!(device.state().await.unwrap(), 100);
+    let active_connection = {
+        let proxy = zbus::Proxy::new(
+            &conn,
+            "org.freedesktop.NetworkManager",
+            device_path.as_str(),
+            "org.freedesktop.NetworkManager.Device",
+        )
+        .await
+        .unwrap();
+        proxy
+            .get_property::<OwnedObjectPath>("ActiveConnection")
+            .await
+            .unwrap()
+    };
+    assert_eq!(active_connection, active_paths[0]);
 }

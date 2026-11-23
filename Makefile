@@ -1,7 +1,7 @@
 PREFIX?=	/usr/local
 CARGO?=	cargo
 
-.PHONY: all build test deps smoke desktop stage install uninstall clean help
+.PHONY: all build test deps smoke desktop gnome-extension stage install uninstall clean help
 
 all: build
 
@@ -22,6 +22,9 @@ signal:
 
 desktop:
 	./scripts/desktop-test.sh
+
+gnome-extension:
+	./scripts/install-gnome-extension.sh
 
 stage:
 	./scripts/install.sh --destdir build/stage --no-start --no-smoke

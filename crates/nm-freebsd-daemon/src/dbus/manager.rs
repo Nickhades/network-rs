@@ -11,6 +11,7 @@ use zbus::{Connection, OwnedObjectPath, OwnedVariant, fdo, interface};
 use crate::auth;
 use crate::core::{Core, CoreError};
 use crate::dbus::{SettingsMap, root_path};
+use crate::settings::owned;
 
 pub struct ManagerIface {
     core: Arc<Core>,
@@ -167,6 +168,32 @@ impl ManagerIface {
             .add_and_activate(&connection, &device, &specific_object)
             .await
             .map_err(Into::into)
+    }
+
+    async fn add_and_activate_connection2(
+        &self,
+        connection: SettingsMap,
+        device: OwnedObjectPath,
+        specific_object: OwnedObjectPath,
+        _options: HashMap<String, OwnedVariant>,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<(
+        OwnedObjectPath,
+        OwnedObjectPath,
+        HashMap<String, OwnedVariant>,
+    )> {
+        auth::require_admin(bus, header, "AddAndActivateConnection2").await?;
+        let (connection_path, active_path) = self
+            .core
+            .add_and_activate(&connection, &device, &specific_object)
+            .await?;
+        // The FreeBSD backend keeps profiles in its own state directory and
+        // cannot promise an on-disk NetworkManager keyfile for every caller.
+        // Report the standard "volatile" persistence result.
+        let mut result = HashMap::new();
+        result.insert("persist".to_string(), owned("volatile"));
+        Ok((connection_path, active_path, result))
     }
 
     async fn deactivate_connection(

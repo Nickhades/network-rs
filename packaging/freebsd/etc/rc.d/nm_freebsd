@@ -19,6 +19,31 @@ pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
 command_args="-H -t nm_freebsd -p ${pidfile} -o /var/log/${name}.log ${procname} ${nm_freebsd_args}"
 
+# daemon(8) uses a supervisor plus a child. A plain rc.subr stop only kills
+# the pidfile child, so repeated restarts can leave old children behind and
+# several daemons then race on the wpa_supplicant control socket (SCAN returns
+# FAIL-BUSY). Make both start and stop converge on exactly one instance.
+nm_freebsd_cleanup()
+{
+    for pid in $(pgrep -f "^$procname$" 2>/dev/null); do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    for pid in $(pgrep -f '^daemon: nm_freebsd' 2>/dev/null); do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    sleep 1
+    for pid in $(pgrep -f "^$procname$" 2>/dev/null); do
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+    for pid in $(pgrep -f '^daemon: nm_freebsd' 2>/dev/null); do
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+    rm -f "$pidfile"
+}
+
+start_precmd="nm_freebsd_cleanup"
+stop_cmd="nm_freebsd_cleanup"
+
 load_rc_config $name
 : ${nm_freebsd_enable:="NO"}
 run_rc_command "$1"

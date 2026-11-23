@@ -1,0 +1,8 @@
+{
+  "uuid": "nm-freebsd@nickhades.github.io",
+  "name": "NetworkManager FreeBSD",
+  "description": "Wi-Fi indicator for the nm-freebsd NetworkManager D-Bus service.",
+  "shell-version": ["45", "46", "47"],
+  "version": 1,
+  "url": "https://github.com/Nickhades/network-rs"
+}

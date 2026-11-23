@@ -24,9 +24,11 @@ events, getifaddrs/resolv.conf for the addresses and DNS that are currently
 configured.
 
 The design rule is simple: **make the existing frontend work; do not write a
-new desktop UI except where the desktop has no NetworkManager frontend of its
-own.** plasma-nm and the GNOME network panel connect to the service directly.
-XFCE gets a small panel plugin that is also only a D-Bus client.
+new desktop UI except where the desktop has no usable NetworkManager client.**
+Upstream plasma-nm and the GNOME network panel use libnm/NetworkManagerQt and
+need those client libraries at build time; FreeBSD's current packages are
+built without them. XFCE gets a small panel plugin, and GNOME gets a Shell
+extension, both of which are raw D-Bus clients and work without libnm.
 
 ```
 plasma-nm / GNOME network panel / XFCE panel plugin
@@ -53,8 +55,11 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 - **v0.1.0** — initial NetworkManager compatibility MVP; kept as a historical
   archive tag.
 - **v0.2.0** — Phase 1 security hardening and Phase 2 DHCP; historical.
-- **v0.2.1 / main** — Phase 3 signal regression plus signal-driven XFCE panel
-  refresh (30-second fallback).
+- **v0.2.1** — Phase 3 signal regression plus signal-driven XFCE panel;
+  historical.
+- **v0.2.2 / main** — NM contract fixes (Device.Disconnect,
+  AddAndActivateConnection2), ActiveConnection adoption, activation
+  serialization/profile dedupe, and GNOME/XFCE frontend fixes.
 
 ## Status
 
@@ -243,6 +248,32 @@ state plus Rescan/Disconnect. Logs are in
 `xfce4-screenshooter`, XTest headers (`pkg install libXtst`) and a real
 `wlan0` for device enumeration.
 
+## GNOME Shell extension
+
+The stock FreeBSD GNOME packages are built without libnm, so the native
+gnome-shell/control-center network UI cannot appear just because the daemon
+registers its D-Bus name.  `gnome-extension/` provides a raw D-Bus Shell
+extension instead (GNOME 45+ ESM):
+
+```sh
+scripts/install-gnome-extension.sh
+# or: make gnome-extension
+```
+
+It installs only for the current user under
+`~/.local/share/gnome-shell/extensions/nm-freebsd@nickhades.github.io` and
+adds the UUID to `org.gnome.shell enabled-extensions`.  Log out and back in,
+or on X11 use `Alt+F2` then `r`.  It queries `GetDevices`,
+`GetAllAccessPoints`, `AddAndActivateConnection`, and subscribes to
+`StateChanged`, `AccessPointAdded/Removed` and AP `PropertiesChanged`; there
+is no polling.
+
+![GNOME Shell extension menu](artifacts/gnome-extension-menu.png)
+
+The screenshot was captured in an isolated Xvfb/nested GNOME Shell 47.10 with
+a private session bus and the real system-bus daemon.  Extension state was
+`enabled=true`, `error=""`.
+
 ## Build
 
 Requirements:
@@ -335,8 +366,11 @@ The port skeleton is in
 
 ## Desktop behaviour
 
-- **KDE / GNOME:** the daemon starts no UI. plasma-nm or the GNOME panel owns
-  the user experience and talks to the D-Bus service.
+- **KDE / GNOME:** the daemon starts no UI. Native plasma-nm / GNOME panels
+  require a functional libnm and packages rebuilt with NetworkManager support;
+  the stock FreeBSD GNOME packages do not include that client. The included
+  GNOME Shell extension in `gnome-extension/` talks to the service directly
+  over D-Bus instead.
 - **XFCE:** after the port is installed with the XFCE option enabled,
   "NetworkManager FreeBSD" appears in *Panel → Add New Items*. The plugin only
   needs D-Bus; it shows the
@@ -422,6 +456,7 @@ tools/                     fake wpa server, port crate-list generator
 artifacts/desktop-test/    panel/menu screenshots and logs
 docs/                      English architecture, D-Bus, scan flow, FreeBSD, testing, review
 docs/zh-CN/                Chinese mirrors of the same documents
+gnome-extension/           raw D-Bus GNOME Shell extension
 install-oneclick.sh        prebuilt root installer (no Rust build)
 uninstall-oneclick.sh      remove the installed files
 Makefile                   convenience targets for the scripts

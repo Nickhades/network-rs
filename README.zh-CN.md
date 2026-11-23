@@ -16,7 +16,7 @@
 
 这是一个用 Rust 编写的 FreeBSD 原生 NetworkManager D-Bus 服务实现。守护进程在系统总线上拥有 <code>org.freedesktop.NetworkManager</code>，导出桌面前端已经认识的 NetworkManager 对象树。真实网络操作仍由 FreeBSD 完成：Wi-Fi 通过 wpa_supplicant，链路和事件通过 netlink，地址和 DNS 通过 getifaddrs / resolv.conf 读取。
 
-设计原则只有一条：**让现有桌面前端直接工作；除非桌面没有自己的 NetworkManager 前端，否则不要另写 UI。** plasma-nm 和 GNOME 网络面板直接连接本服务；XFCE 使用一个同样只通过 D-Bus 通信的小面板插件。
+设计原则只有一条：**让现有桌面前端直接工作；除非桌面没有可用的 NetworkManager 客户端，否则不要另写 UI。** 上游 plasma-nm/GNOME 网络面板依赖 libnm/NetworkManagerQt，而 FreeBSD 当前桌面包没有这些客户端库；XFCE 使用一个小面板插件，GNOME 使用一个 Shell 扩展，二者都是 raw D-Bus 客户端。
 
     桌面：plasma-nm / GNOME 网络面板 / XFCE 面板插件
                          |
@@ -40,8 +40,10 @@
 
 - **v0.1.0** — 初始 NetworkManager 兼容 MVP；作为历史存档标签保留。
 - **v0.2.0** — Phase 1 安全加固与 Phase 2 DHCP；历史存档。
-- **v0.2.1 / main** — Phase 3 信号回归，以及信号驱动的 XFCE 面板刷新
-  （30 秒兜底）。
+- **v0.2.1** — Phase 3 信号回归与信号驱动 XFCE 面板；历史存档。
+- **v0.2.2 / main** — NM 契约修复（Device.Disconnect、
+  AddAndActivateConnection2）、ActiveConnection 接管、激活串行化/profile
+  去重，以及 GNOME/XFCE 前端修复。
 
 ## 当前状态
 
@@ -196,6 +198,28 @@ dhclient hook 文件备份为 <code>*.nm-freebsd.bak</code>，安装
 <code>Xvfb</code>、<code>xfce4-panel</code>、<code>xfce4-screenshooter</code>、
 XTest 开发文件（<code>pkg install libXtst</code>），以及一个真实的
 <code>wlan0</code> 用于设备枚举。
+
+## GNOME Shell 扩展
+
+FreeBSD 的 GNOME 包没有 libnm，因此只注册 D-Bus 名称不会让原生 GNOME 网络菜单出现。
+<code>gnome-extension/</code> 提供一个 raw D-Bus 的 Shell 扩展（GNOME 45+ ESM）：
+
+    scripts/install-gnome-extension.sh
+    # 或 make gnome-extension
+
+它只安装到当前用户
+<code>~/.local/share/gnome-shell/extensions/nm-freebsd@nickhades.github.io</code>，
+并把 UUID 加入 <code>org.gnome.shell enabled-extensions</code>。重新登录，
+或在 X11 下按 <code>Alt+F2</code> 输入 <code>r</code>。扩展调用
+<code>GetDevices</code>、<code>GetAllAccessPoints</code>、
+<code>AddAndActivateConnection</code>，订阅 <code>StateChanged</code>、
+<code>AccessPointAdded/Removed</code> 和 AP <code>PropertiesChanged</code>；
+没有轮询。
+
+![GNOME Shell 扩展菜单](artifacts/gnome-extension-menu.png)
+
+截图来自隔离的 Xvfb + nested GNOME Shell 47.10、私有 session bus 和真实
+system-bus daemon；扩展状态为 <code>enabled=true</code>、<code>error=""</code>。
 
 ## 构建
 

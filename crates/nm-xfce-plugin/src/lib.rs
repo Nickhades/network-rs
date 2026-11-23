@@ -52,6 +52,7 @@ trait Manager {
     default_path = "/"
 )]
 trait Device {
+    fn disconnect(&self) -> zbus::Result<()>;
     #[zbus(property)]
     fn device_type(&self) -> zbus::Result<u32>;
 }
@@ -296,31 +297,35 @@ impl BusClient {
             .add_and_activate_connection(settings, wifi_path, root)
             .await
             .map_err(|error| format!("connect failed: {error}"))?;
-        for _ in 0..20 {
+        for _ in 0..50 {
             tokio::time::sleep(Duration::from_millis(300)).await;
             let state = manager.state().await.unwrap_or(0);
-            if state == 60 || state == 50 {
+            if state == 60 {
                 return Ok(());
             }
+            if state == 50 {
+                return Err("connected without IPv4 address".to_string());
+            }
         }
-        Ok(())
+        Err("timed out waiting for NetworkManager activation".to_string())
     }
 
     async fn disconnect(&self) -> Result<(), String> {
         let manager = ManagerProxy::new(&self.connection)
             .await
             .map_err(|e| e.to_string())?;
-        let active = manager
-            .active_connections()
-            .await
-            .map_err(|e| e.to_string())?;
-        for path in active {
-            manager
-                .deactivate_connection(path)
+        for path in manager.get_devices().await.map_err(|e| e.to_string())? {
+            let device = DeviceProxy::builder(&self.connection)
+                .path(path)
+                .build()
                 .await
                 .map_err(|e| e.to_string())?;
+            if device.device_type().await.unwrap_or(0) == 2 {
+                device.disconnect().await.map_err(|e| e.to_string())?;
+                return Ok(());
+            }
         }
-        Ok(())
+        Err("no Wi-Fi device".to_string())
     }
 }
 
@@ -430,15 +435,19 @@ impl Ui {
             let privacy = ap.privacy;
             let button = self.button.clone();
             item.connect_activate(move |_| {
-                let psk = if privacy {
-                    prompt_password(&button)
+                if privacy {
+                    let tx = tx.clone();
+                    let ssid = ssid.clone();
+                    prompt_password(&button, move |password| {
+                        let _ = tx.send(Request::Connect {
+                            ssid,
+                            psk: Some(password),
+                        });
+                    });
                 } else {
-                    Some(None)
-                };
-                if let Some(psk) = psk {
                     let _ = tx.send(Request::Connect {
                         ssid: ssid.clone(),
-                        psk,
+                        psk: None,
                     });
                 }
             });
@@ -473,7 +482,10 @@ impl Ui {
     }
 }
 
-fn prompt_password(button: &gtk::Button) -> Option<Option<String>> {
+fn prompt_password<F>(button: &gtk::Button, on_password: F)
+where
+    F: FnOnce(String) + 'static,
+{
     let parent = button
         .toplevel()
         .and_then(|widget| widget.downcast::<gtk::Window>().ok());
@@ -487,20 +499,32 @@ fn prompt_password(button: &gtk::Button) -> Option<Option<String>> {
         ],
     );
     dialog.set_default_response(gtk::ResponseType::Ok);
+    dialog.set_default_size(360, -1);
+    dialog.set_position(gtk::WindowPosition::Center);
+    dialog.set_border_width(12);
     let entry = gtk::Entry::new();
     entry.set_visibility(false);
     entry.set_activates_default(true);
     entry.set_placeholder_text(Some("WPA passphrase"));
     dialog.content_area().add(&entry);
+    let on_password = Rc::new(RefCell::new(Some(on_password)));
+    let callback = on_password.clone();
+    // Keep the top-level dialog alive after this function returns.  The
+    // response closure breaks the strong reference before closing it.
+    let holder = Rc::new(RefCell::new(Some(dialog.clone())));
+    let holder_for_response = holder.clone();
+    dialog.connect_response(move |dialog, response| {
+        let text = entry.text().to_string();
+        let _ = holder_for_response.borrow_mut().take();
+        dialog.close();
+        if response == gtk::ResponseType::Ok
+            && !text.is_empty()
+            && let Some(callback) = callback.borrow_mut().take()
+        {
+            callback(text);
+        }
+    });
     dialog.show_all();
-    let response = dialog.run();
-    let text = entry.text().to_string();
-    dialog.close();
-    if response == gtk::ResponseType::Ok && !text.is_empty() {
-        Some(Some(text))
-    } else {
-        None
-    }
 }
 
 struct Worker {

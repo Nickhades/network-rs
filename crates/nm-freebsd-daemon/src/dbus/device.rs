@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use nm_common::consts::{device_capability, device_type, wifi_device_capability, wireless_mode};
+use zbus::message::Header;
 use zbus::object_server::SignalEmitter;
-use zbus::{OwnedObjectPath, fdo, interface};
+use zbus::{Connection, OwnedObjectPath, fdo, interface};
 
+use crate::auth;
 use crate::core::Core;
 use crate::dbus::{SettingsMap, root_path};
 
@@ -201,6 +203,18 @@ impl DeviceIface {
         Err(fdo::Error::NotSupported(
             "deleting a FreeBSD interface is not supported".to_string(),
         ))
+    }
+
+    async fn disconnect(
+        &self,
+        #[zbus(connection)] bus: &Connection,
+        #[zbus(header)] header: Header<'_>,
+    ) -> fdo::Result<()> {
+        auth::require_admin(bus, header, "Device.Disconnect").await?;
+        self.core
+            .disconnect_device(&self.ifname)
+            .await
+            .map_err(Into::into)
     }
 
     #[zbus(signal)]

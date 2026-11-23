@@ -19,12 +19,14 @@ cd "$root"
 outdir=$root/artifacts/desktop-test
 do_click=1
 real_wpa=0
+password_dialog=0
 for arg in "$@"; do
     case "$arg" in
         --no-click) do_click=0 ;;
         --real-wpa) real_wpa=1 ;;
+        --password-dialog) password_dialog=1 ;;
         -h|--help)
-            echo "usage: $0 [--no-click] [--real-wpa]"
+            echo "usage: $0 [--no-click] [--real-wpa] [--password-dialog]"
             exit 0
             ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
@@ -327,6 +329,24 @@ EOF
         else
             echo "desktop-test: menu screenshot not produced" >&2
         fi
+        if [ "$password_dialog" -eq 1 ]; then
+            pw_shot=$run/nm-freebsd-password.png
+            "$run/xclick" "$display" 60 92 >/dev/null 2>&1 || true
+            sleep 1
+            rm -f "$pw_shot"
+            xfce4-screenshooter -f -s "$pw_shot" --display="$display" \
+                >"$run/screenshooter-password.log" 2>&1 || true
+            if [ ! -s "$pw_shot" ]; then
+                ffmpeg -hide_banner -loglevel error -f x11grab \
+                    -video_size 1200x800 -i "$display" -frames:v 1 -y "$pw_shot" \
+                    >"$run/ffmpeg-password.log" 2>&1 || true
+            fi
+            if [ -s "$pw_shot" ]; then
+                file "$pw_shot"
+            else
+                echo "desktop-test: password dialog screenshot not produced" >&2
+            fi
+        fi
     else
         echo "desktop-test: could not build the XTest click helper" >&2
         cat "$run/xclick-build.log" >&2
@@ -338,6 +358,9 @@ cp "$shot" "$outdir/nm-freebsd-panel.png"
 if [ -s "$menu_shot" ]; then
     cp "$menu_shot" "$outdir/nm-freebsd-menu.png"
 fi
+if [ -n "$password_dialog" ] && [ "$password_dialog" -eq 1 ] && [ -s "$pw_shot" ]; then
+    cp "$pw_shot" "$outdir/nm-freebsd-password.png"
+fi
 cp "$run"/*.log "$outdir/logs/" 2>/dev/null || true
 cp "$run/window-tree.txt" "$outdir/logs/" 2>/dev/null || true
 
@@ -347,6 +370,9 @@ echo "  display:     $display"
 echo "  panel shot:  $outdir/nm-freebsd-panel.png"
 if [ -s "$menu_shot" ]; then
     echo "  menu shot:   $outdir/nm-freebsd-menu.png"
+fi
+if [ "$password_dialog" -eq 1 ] && [ -s "$pw_shot" ]; then
+    echo "  password:    $outdir/nm-freebsd-password.png"
 fi
 echo "  logs:        $outdir/logs"
 echo "  runtime:     $run"

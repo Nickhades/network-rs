@@ -122,6 +122,27 @@ impl WpaCtrlBackend {
     }
 }
 
+fn decode_wpa_ssid(raw: &str) -> Vec<u8> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 3 < bytes.len()
+            && bytes[i + 1] == b'x'
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 2..i + 4])
+            && let Ok(value) = u8::from_str_radix(hex, 16)
+        {
+            out.push(value);
+            i += 4;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
 pub fn parse_scan_results(raw: &[u8]) -> Result<Vec<ScanAp>, BackendError> {
     let mut out = Vec::new();
     let mut lines = raw.split(|b| *b == b'\n');
@@ -217,6 +238,13 @@ impl Backend for WpaCtrlBackend {
             ));
         }
 
+        if let Err(error) = self
+            .remove_networks_for_ssid(request.ifname, request.ssid)
+            .await
+        {
+            tracing::debug!(ifname = request.ifname, %error, "could not prune old wpa networks");
+        }
+
         let id = String::from_utf8_lossy(&self.command(request.ifname, "ADD_NETWORK").await?)
             .trim()
             .to_string();
@@ -280,6 +308,41 @@ impl Backend for WpaCtrlBackend {
 }
 
 impl WpaCtrlBackend {
+    /// Remove stale wpa_supplicant networks for the same SSID before adding a
+    /// fresh one. Repeated AddAndActivate calls otherwise leave one network id
+    /// per attempt and eventually one SELECT_NETWORK storm per click.
+    async fn remove_networks_for_ssid(
+        &self,
+        ifname: &str,
+        ssid: &[u8],
+    ) -> Result<(), BackendError> {
+        let raw = self.command(ifname, "LIST_NETWORKS").await?;
+        let text = String::from_utf8_lossy(&raw);
+        let mut remove = Vec::new();
+        for line in text.lines().skip(1) {
+            let mut fields = line.split('\t');
+            let Some(id) = fields.next() else {
+                continue;
+            };
+            let Some(raw_ssid) = fields.next() else {
+                continue;
+            };
+            let id = id.trim();
+            if id.parse::<u32>().is_err() {
+                continue;
+            }
+            if decode_wpa_ssid(raw_ssid) == ssid {
+                remove.push(id.to_string());
+            }
+        }
+        for id in remove {
+            if let Err(error) = self.command(ifname, &format!("REMOVE_NETWORK {id}")).await {
+                tracing::debug!(ifname, id, %error, "failed to remove duplicate wpa network");
+            }
+        }
+        Ok(())
+    }
+
     async fn event_loop(&self, ifname: String, tx: mpsc::Sender<BackendEvent>) {
         loop {
             let server = self.socket_path(&ifname);

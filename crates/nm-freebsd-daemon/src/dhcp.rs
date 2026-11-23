@@ -101,37 +101,82 @@ impl DhcpManager {
 
     /// Start a DHCP client for `ifname`, or attach to an existing dhclient.
     ///
-    /// A PID file for an already-running system dhclient is treated as a
-    /// reason to reuse it. We never kill that instance on deactivate; it may
-    /// belong to the rc.conf network setup.
-    pub fn start(self: &Arc<Self>, ifname: &str) -> Result<DhcpStart, DhcpError> {
+    /// A PID file for an already-running system dhclient is reused only when
+    /// `replace_existing` is false (wired setups).  A Wi-Fi activation has
+    /// just switched networks behind that client, so it must be stopped and
+    /// replaced by a daemon-managed client; otherwise it keeps the old lease
+    /// and DISCOVER is never sent for the new AP.
+    pub fn start(
+        self: &Arc<Self>,
+        ifname: &str,
+        replace_existing: bool,
+    ) -> Result<DhcpStart, DhcpError> {
         if self.kind == DhcpBackendKind::Disabled {
             return Err(DhcpError::Disabled);
         }
-        {
+        let managed_pid = {
             let children = self.children.lock().expect("dhcp children");
-            if children.contains_key(ifname) {
+            children.get(ifname).copied()
+        };
+        if let Some(pid) = managed_pid {
+            if !replace_existing {
                 return Ok(DhcpStart {
                     managed: true,
                     backend: self.backend(),
                 });
             }
+            // The managed client was started for the previous SSID.  A new
+            // Wi-Fi activation must release/renew against the new AP, so stop
+            // it and wait for the old process to exit before starting another.
+            tracing::info!(
+                ifname,
+                pid,
+                "restarting managed DHCP client for new Wi-Fi network"
+            );
+            self.stop(ifname);
+            for _ in 0..40 {
+                if !pid_alive(pid) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
         }
         if let Some(pid) = self.existing_pid(ifname) {
-            self.reused
-                .lock()
-                .expect("dhcp reused")
-                .insert(ifname.to_string());
-            tracing::info!(ifname, pid, "reusing existing dhclient");
-            let _ = self.tx.try_send(DhcpEvent::Started {
-                ifname: ifname.to_string(),
-                managed: false,
-                backend: self.backend(),
-            });
-            return Ok(DhcpStart {
-                managed: false,
-                backend: self.backend(),
-            });
+            if replace_existing {
+                tracing::info!(
+                    ifname,
+                    pid,
+                    "replacing existing dhclient for new Wi-Fi network"
+                );
+                // This is normally the rc.conf dhclient that is still bound to
+                // the previous SSID.  Wi-Fi activation owns the interface now,
+                // so terminate it and start a child that follows this lease.
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                }
+                for _ in 0..40 {
+                    if !pid_alive(pid) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                self.cleanup_pid_file(ifname, pid);
+            } else {
+                self.reused
+                    .lock()
+                    .expect("dhcp reused")
+                    .insert(ifname.to_string());
+                tracing::info!(ifname, pid, "reusing existing dhclient");
+                let _ = self.tx.try_send(DhcpEvent::Started {
+                    ifname: ifname.to_string(),
+                    managed: false,
+                    backend: self.backend(),
+                });
+                return Ok(DhcpStart {
+                    managed: false,
+                    backend: self.backend(),
+                });
+            }
         }
 
         let (program, args) = match self.kind {
@@ -364,7 +409,10 @@ mod tests {
         let (tx, _rx) = mpsc::channel(4);
         let manager = Arc::new(DhcpManager::new(&config, tx));
         assert!(manager.is_disabled());
-        assert!(matches!(manager.start("wlan0"), Err(DhcpError::Disabled)));
+        assert!(matches!(
+            manager.start("wlan0", false),
+            Err(DhcpError::Disabled)
+        ));
     }
 
     #[test]
@@ -379,7 +427,15 @@ mod tests {
     async fn managed_client_starts_and_stops() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("dhclient");
-        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        let marker = dir.path().join("starts");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf 'x\\n' >> '{}'\nsleep 30\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
         let mut perms = std::fs::metadata(&script).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&script, perms).unwrap();
@@ -389,7 +445,9 @@ mod tests {
         config.dhclient_path = script;
         let (tx, mut rx) = mpsc::channel(8);
         let manager = Arc::new(DhcpManager::new(&config, tx));
-        let started = manager.start("nmtest0").expect("start fake dhclient");
+        let started = manager
+            .start("nmtest0", false)
+            .expect("start fake dhclient");
         assert!(started.managed);
         assert!(manager.is_managed("nmtest0"));
         assert!(matches!(
@@ -398,6 +456,31 @@ mod tests {
                 .unwrap(),
             Some(DhcpEvent::Started { managed: true, .. })
         ));
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .unwrap_or_default()
+                .lines()
+                .count(),
+            1,
+            "first fake DHCP client should have started"
+        );
+
+        // A new Wi-Fi activation must replace the old managed client rather
+        // than silently returning the existing one.
+        let restarted = manager
+            .start("nmtest0", true)
+            .expect("restart fake dhclient");
+        assert!(restarted.managed);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            std::fs::read_to_string(&marker)
+                .unwrap_or_default()
+                .lines()
+                .count(),
+            2
+        );
+
         manager.stop("nmtest0");
         assert!(!manager.is_managed("nmtest0"));
     }

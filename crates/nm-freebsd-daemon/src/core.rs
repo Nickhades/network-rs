@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nm_common::consts::{active_connection_state, ap_flags, device_state, device_state_reason};
 use nm_common::names;
@@ -50,6 +50,9 @@ pub struct Core {
     pub dhcp: Arc<DhcpManager>,
     bus: OnceLock<Bus>,
     refresh_lock: Mutex<()>,
+    /// Serializes activation setup and rate-limits rapid connect retries.
+    activation_lock: Mutex<()>,
+    last_activation: Mutex<Option<Instant>>,
     dhcp_events: Mutex<Option<mpsc::Receiver<DhcpEvent>>>,
 }
 
@@ -73,6 +76,8 @@ impl Core {
             dhcp,
             bus: OnceLock::new(),
             refresh_lock: Mutex::new(()),
+            activation_lock: Mutex::new(()),
+            last_activation: Mutex::new(None),
             dhcp_events: Mutex::new(Some(dhcp_rx)),
         })
     }
@@ -101,6 +106,7 @@ impl Core {
             .await?;
 
         self.start_dhcp_events().await;
+        self.dedupe_profiles().await;
 
         let profiles: Vec<ConnectionProfile> = self
             .state
@@ -124,6 +130,49 @@ impl Core {
     // ------------------------------------------------------------------
     // Device lifecycle
     // ------------------------------------------------------------------
+
+    /// Collapse duplicate Wi-Fi profiles accumulated by repeated ad-hoc
+    /// AddAndActivateConnection calls. Keep the newest profile per SSID.
+    async fn dedupe_profiles(self: &Arc<Self>) {
+        let duplicates: Vec<OwnedObjectPath> = {
+            let state = self.state.read().await;
+            let mut newest: HashMap<Vec<u8>, (u64, OwnedObjectPath)> = HashMap::new();
+            let mut duplicates = Vec::new();
+            for profile in state
+                .connections
+                .values()
+                .filter(|profile| profile.kind == ProfileKind::Wifi)
+            {
+                match newest.get(&profile.ssid) {
+                    Some((timestamp, _path)) if *timestamp >= profile.timestamp => {
+                        duplicates.push(profile.path.clone());
+                    }
+                    Some(_) => {
+                        if let Some((_timestamp, old_path)) = newest.insert(
+                            profile.ssid.clone(),
+                            (profile.timestamp, profile.path.clone()),
+                        ) {
+                            duplicates.push(old_path);
+                        }
+                    }
+                    None => {
+                        newest.insert(
+                            profile.ssid.clone(),
+                            (profile.timestamp, profile.path.clone()),
+                        );
+                    }
+                }
+            }
+            duplicates
+        };
+        for path in duplicates {
+            if let Err(error) = self.delete_connection(&path).await {
+                tracing::warn!(%error, path = %path, "failed to remove duplicate profile");
+            } else {
+                tracing::info!(path = %path, "removed duplicate Wi-Fi profile");
+            }
+        }
+    }
 
     async fn load_devices(self: &Arc<Self>) -> Result<(), CoreError> {
         let dumped = tokio::task::spawn_blocking(crate::netlink::dump_links).await;
@@ -892,9 +941,42 @@ impl Core {
         device: &OwnedObjectPath,
         specific: &OwnedObjectPath,
     ) -> Result<(OwnedObjectPath, OwnedObjectPath), CoreError> {
-        let draft =
+        let mut draft =
             profile_store::parse_settings(settings, None).map_err(CoreError::InvalidArgs)?;
-        let connection = self.add_connection(draft, true).await?;
+        // Ad-hoc clients (including the XFCE plugin) generate a fresh UUID on
+        // every click. Reuse the profile for the same SSID and update its
+        // secret instead of accumulating one profile per attempt.
+        let existing = {
+            let state = self.state.read().await;
+            state
+                .connections
+                .values()
+                .find(|profile| profile.kind == draft.kind && profile.ssid == draft.ssid)
+                .map(|profile| (profile.uuid.clone(), profile.path.clone()))
+        };
+        if let Some((uuid, _path)) = &existing {
+            draft.uuid = uuid.clone();
+        }
+        let connection = self.add_connection(draft.clone(), true).await?;
+        if let Some((_uuid, keep)) = existing {
+            let duplicates: Vec<OwnedObjectPath> = {
+                let state = self.state.read().await;
+                state
+                    .connections
+                    .values()
+                    .filter(|profile| {
+                        profile.path != keep
+                            && profile.path != connection
+                            && profile.kind == draft.kind
+                            && profile.ssid == draft.ssid
+                    })
+                    .map(|profile| profile.path.clone())
+                    .collect()
+            };
+            for path in duplicates {
+                let _ = self.delete_connection(&path).await;
+            }
+        }
         let active = self.activate(&connection, device, specific).await?;
         Ok((connection, active))
     }
@@ -905,6 +987,18 @@ impl Core {
         device: &OwnedObjectPath,
         specific: &OwnedObjectPath,
     ) -> Result<OwnedObjectPath, CoreError> {
+        let _activation_guard = self.activation_lock.lock().await;
+        {
+            let mut last = self.last_activation.lock().await;
+            if let Some(previous) = *last
+                && previous.elapsed() < Duration::from_secs(2)
+            {
+                return Err(CoreError::InvalidArgs(
+                    "activation rate limited; wait before retrying".to_string(),
+                ));
+            }
+            *last = Some(Instant::now());
+        }
         let profile = if connection.as_str() == "/" {
             self.ephemeral_profile(specific).await?
         } else {
@@ -1198,7 +1292,14 @@ impl Core {
         self.set_device_state(ifname, device_state::IP_CONFIG, device_state_reason::NONE)
             .await;
 
-        let existing_ip4 = self.ip4_for(ifname);
+        let cached_ip4 = {
+            let state = self.state.read().await;
+            state
+                .devices
+                .get(ifname)
+                .and_then(|device| device.ip4.clone())
+        };
+        let existing_ip4 = self.ip4_for(ifname).or(cached_ip4);
         if self.dhcp.is_disabled() {
             if let Some(ip4) = existing_ip4 {
                 tracing::info!(ifname, "DHCP disabled; using existing IPv4 address");
@@ -1216,7 +1317,7 @@ impl Core {
             return;
         }
 
-        if let Err(error) = self.dhcp.start(ifname) {
+        if let Err(error) = self.dhcp.start(ifname, status.is_some()) {
             if let Some(ip4) = existing_ip4 {
                 tracing::warn!(ifname, %error, "DHCP start failed; using existing IPv4 address");
                 self.complete_activation_with_ip4(active_path, ifname, status, ip4)
@@ -1610,6 +1711,63 @@ impl Core {
         self.notify_manager().await;
     }
 
+    /// Standard NetworkManager Device.Disconnect().  It stops the active
+    /// connection if we own it; otherwise it still asks the native backend to
+    /// leave the current Wi-Fi network and clears the cached IP state.
+    pub async fn disconnect_device(self: &Arc<Self>, ifname: &str) -> Result<(), CoreError> {
+        let device = {
+            let state = self.state.read().await;
+            state
+                .devices
+                .get(ifname)
+                .cloned()
+                .ok_or_else(|| CoreError::UnknownObject(ifname.to_string()))?
+        };
+        if let Some(active_path) = device.active_connection.clone() {
+            let owned = self.state.read().await.active.contains_key(&active_path);
+            if owned {
+                return self.deactivate(&active_path).await;
+            }
+        }
+
+        if device.kind == DeviceKind::Wifi {
+            self.backend.disconnect(ifname).await?;
+        }
+        self.dhcp.stop(ifname);
+
+        let (old_state, ip4_path) = {
+            let mut state = self.state.write().await;
+            let Some(device) = state.devices.get_mut(ifname) else {
+                return Ok(());
+            };
+            let old = device.state;
+            device.state = device_state::DISCONNECTED;
+            device.state_reason = device_state_reason::USER;
+            device.active_connection = None;
+            device.active_ap = None;
+            device.ip4 = None;
+            let ip4_path = device.ip4_config_path.take();
+            state.recompute_manager_state();
+            (old, ip4_path)
+        };
+        if let Some(path) = ip4_path
+            && let Some(bus) = self.bus.get()
+        {
+            let _ = bus.server.remove::<Ip4ConfigIface, _>(&path).await;
+        }
+        self.notify_device(
+            ifname,
+            Some((
+                old_state,
+                device_state::DISCONNECTED,
+                device_state_reason::USER,
+            )),
+        )
+        .await;
+        self.notify_manager().await;
+        Ok(())
+    }
+
     pub async fn deactivate(
         self: &Arc<Self>,
         active_path: &OwnedObjectPath,
@@ -1871,13 +2029,145 @@ impl Core {
         });
     }
 
+    /// Adopt a connection that was established outside this daemon (for
+    /// example wpa_supplicant auto-connect at boot). Standard NM clients must
+    /// see an ActiveConnection object, not just an activated Device.
+    async fn adopt_existing_connection(self: &Arc<Self>, ifname: &str, status: &WifiStatus) {
+        if !status.state.is_connected() {
+            return;
+        }
+        let device = {
+            let state = self.state.read().await;
+            let Some(device) = state.devices.get(ifname) else {
+                return;
+            };
+            if state.active_for_device(&device.path).is_some() {
+                return;
+            }
+            device.clone()
+        };
+
+        let profile = {
+            let existing = self
+                .state
+                .read()
+                .await
+                .connections
+                .values()
+                .find(|profile| profile.kind == ProfileKind::Wifi && profile.ssid == status.ssid)
+                .cloned();
+            if let Some(profile) = existing {
+                profile
+            } else {
+                let draft = ProfileDraft {
+                    uuid: Uuid::new_v4().to_string(),
+                    id: ssid_to_string(&status.ssid),
+                    kind: ProfileKind::Wifi,
+                    ifname: Some(ifname.to_string()),
+                    ssid: status.ssid.clone(),
+                    psk: None,
+                    key_mgmt: status.key_mgmt.clone(),
+                    autoconnect: true,
+                    timestamp: unix_now(),
+                };
+                let Ok(path) = self.add_connection(draft, false).await else {
+                    return;
+                };
+                let profile = self.state.read().await.connections.get(&path).cloned();
+                let Some(profile) = profile else {
+                    return;
+                };
+                if self.register_settings_connection(&profile).await.is_err() {
+                    return;
+                }
+                profile
+            }
+        };
+
+        let (active_path, old_state) = {
+            let mut state = self.state.write().await;
+            if state.active_for_device(&device.path).is_some() {
+                return;
+            }
+            let specific = status
+                .bssid
+                .as_ref()
+                .and_then(|bssid| state.ap_by_bssid(ifname, bssid))
+                .map(|ap| ap.path.clone())
+                .unwrap_or_else(root_path);
+            let path = state.next_active_path();
+            let default = !state.active.values().any(|active| active.default);
+            let ip4_config_path = state
+                .devices
+                .get(ifname)
+                .and_then(|device| device.ip4_config_path.clone());
+            state.active.insert(
+                path.clone(),
+                ActiveEntry {
+                    path: path.clone(),
+                    connection_path: profile.path.clone(),
+                    device_path: device.path.clone(),
+                    specific_object: specific,
+                    id: profile.id.clone(),
+                    uuid: profile.uuid.clone(),
+                    state: active_connection_state::ACTIVATED,
+                    default,
+                    ip4_config_path,
+                },
+            );
+            let old = state
+                .devices
+                .get(ifname)
+                .map(|device| device.state)
+                .unwrap_or(device_state::UNKNOWN);
+            if let Some(device) = state.devices.get_mut(ifname) {
+                device.active_connection = Some(path.clone());
+                device.state = device_state::ACTIVATED;
+                device.state_reason = device_state_reason::NONE;
+            }
+            state.recompute_manager_state();
+            (path, old)
+        };
+
+        if let Some(bus) = self.bus.get()
+            && let Err(error) = bus
+                .server
+                .at(
+                    active_path.clone(),
+                    ActiveConnectionIface::new(self.clone(), active_path.clone()),
+                )
+                .await
+        {
+            tracing::warn!(%error, ifname, "failed to register adopted ActiveConnection");
+            let mut state = self.state.write().await;
+            state.active.remove(&active_path);
+            if let Some(device) = state.devices.get_mut(ifname) {
+                device.active_connection = None;
+            }
+            state.recompute_manager_state();
+            return;
+        }
+        self.notify_active(&active_path).await;
+        self.notify_device(
+            ifname,
+            Some((
+                old_state,
+                device_state::ACTIVATED,
+                device_state_reason::NONE,
+            )),
+        )
+        .await;
+        self.notify_manager().await;
+    }
+
     async fn apply_status_event(self: &Arc<Self>, ifname: &str, status: WifiStatus) {
         let has_active = {
             let state = self.state.read().await;
             state
                 .devices
                 .get(ifname)
-                .map(|device| device.active_connection.is_some())
+                .and_then(|device| device.active_connection.as_ref())
+                .map(|path| state.active.contains_key(path))
                 .unwrap_or(false)
         };
         if has_active {
@@ -1928,6 +2218,7 @@ impl Core {
         }
         if connected {
             self.ensure_ip4_config(ifname).await;
+            self.adopt_existing_connection(ifname, &status).await;
         }
         self.notify_device(
             ifname,
