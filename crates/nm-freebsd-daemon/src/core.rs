@@ -1248,7 +1248,7 @@ impl Core {
         active_path: OwnedObjectPath,
         profile: ConnectionProfile,
         device_path: OwnedObjectPath,
-        _specific: OwnedObjectPath,
+        specific: OwnedObjectPath,
     ) {
         let Some(device) = self.device_by_path(&device_path).await else {
             return;
@@ -1279,11 +1279,21 @@ impl Core {
         self.set_device_state(&ifname, device_state::CONFIG, device_state_reason::NONE)
             .await;
 
+        let bssid = if specific.as_str() == "/" {
+            None
+        } else {
+            self.state
+                .read()
+                .await
+                .ap_by_path(&specific)
+                .map(|ap| ap.bssid.clone())
+        };
         let request = ConnectRequest {
             ifname: &ifname,
             ssid: &profile.ssid,
             psk: profile.psk.as_deref(),
             key_mgmt: &key_mgmt,
+            bssid: bssid.as_deref(),
             hidden: profile.hidden,
         };
         if let Err(error) = self.backend.connect(&request).await {
@@ -2087,9 +2097,12 @@ impl Core {
                 if core.config.initial_scan {
                     let _ = core.backend.scan(&ifname).await;
                     tokio::time::sleep(Duration::from_millis(1500)).await;
-                    if let Err(error) = core.refresh_access_points(&ifname).await {
-                        tracing::debug!(%error, ifname, "initial scan results unavailable");
-                    }
+                }
+                // Never issue a scan on startup, but do publish whatever BSS
+                // list wpa_supplicant already has cached. This keeps the
+                // frontend usable without waking the rtw89 scan path.
+                if let Err(error) = core.refresh_access_points(&ifname).await {
+                    tracing::debug!(%error, ifname, "cached scan results unavailable");
                 }
             }
         });

@@ -40,10 +40,9 @@
 
 ## 版本历史
 
-- **v0.2.15 / main** — 优先已安装的 <code>dhcpcd</code>，同时识别
-  per-interface 进程和全局 <code>/var/run/dhcpcd/pid</code> manager，
-  跨接口复用系统 dhcpcd；rc 仍默认 <code>--no-initial-scan</code>。
-  本文档描述当前代码。
+- **v0.2.18 / main** — 启动时不扫描，只发布 wpa_supplicant 已有的缓存
+  BSS 列表；XFCE 的 Saved connections 增加 Connect（有缓存 AP 时使用其
+  BSSID）。本文档描述当前代码。
 - 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
   历史说明见 GitHub releases。
 

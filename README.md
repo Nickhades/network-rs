@@ -53,10 +53,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.2.15 / main** — prefer an installed `dhcpcd`, detect both the
-  per-interface process and the global `/var/run/dhcpcd/pid` manager, and reuse
-  the system dhcpcd across interfaces; rc still defaults to
-  `--no-initial-scan`. This document describes the current tree.
+- **v0.2.18 / main** — publish wpa_supplicant's cached BSS list without
+  issuing a scan on startup, and add a Connect action to XFCE Saved
+  connections (using the cached AP's BSSID when available). This document
+  describes the current tree.
 - Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
   GitHub releases page for their historical notes.
 

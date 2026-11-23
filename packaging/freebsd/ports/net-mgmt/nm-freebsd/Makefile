@@ -1,5 +1,5 @@
 PORTNAME=	nm-freebsd
-DISTVERSION=	0.2.15
+DISTVERSION=	0.2.18
 CATEGORIES=	net-mgmt
 
 MAINTAINER=	zxy@example.com

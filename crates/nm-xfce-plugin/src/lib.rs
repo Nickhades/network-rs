@@ -30,6 +30,12 @@ use zbus::{Connection, MatchRule, MessageStream, OwnedObjectPath, OwnedVariant, 
 )]
 trait Manager {
     fn get_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+    fn activate_connection(
+        &self,
+        connection: OwnedObjectPath,
+        device: OwnedObjectPath,
+        specific_object: OwnedObjectPath,
+    ) -> zbus::Result<OwnedObjectPath>;
     fn add_and_activate_connection(
         &self,
         connection: std::collections::HashMap<
@@ -121,6 +127,7 @@ struct Snapshot {
 
 #[derive(Debug, Clone)]
 struct ApInfo {
+    path: OwnedObjectPath,
     ssid: Vec<u8>,
     label: String,
     band: String,
@@ -132,6 +139,7 @@ struct ApInfo {
 struct ProfileInfo {
     path: OwnedObjectPath,
     id: String,
+    ssid: Vec<u8>,
 }
 
 fn band_label(frequency: u32) -> String {
@@ -152,11 +160,28 @@ fn variant_string(
         .and_then(|value| String::try_from(value).ok())
 }
 
+fn variant_bytes(
+    map: &std::collections::HashMap<String, OwnedVariant>,
+    key: &str,
+) -> Option<Vec<u8>> {
+    map.get(key)
+        .and_then(|value| value.try_clone().ok())
+        .and_then(|value| Vec::<u8>::try_from(value).ok())
+}
+
 #[derive(Debug)]
 enum Request {
     Refresh,
     Rescan,
-    Connect { ssid: Vec<u8>, psk: Option<String> },
+    Connect {
+        ssid: Vec<u8>,
+        psk: Option<String>,
+        specific: OwnedObjectPath,
+    },
+    ActivateProfile {
+        connection: OwnedObjectPath,
+        specific: OwnedObjectPath,
+    },
     DeleteProfile(OwnedObjectPath),
     Disconnect,
     Shutdown,
@@ -236,7 +261,7 @@ impl BusClient {
             .map_err(|error| format!("access point list: {error}"))?
         {
             let Ok(ap) = AccessPointProxy::builder(&self.connection)
-                .path(path)
+                .path(path.clone())
                 .build()
                 .await
             else {
@@ -253,6 +278,7 @@ impl BusClient {
             let privacy = ap.flags().await.unwrap_or(0) & 1 == 1;
             let band = band_label(ap.frequency().await.unwrap_or(0));
             let info = ApInfo {
+                path,
                 ssid,
                 label,
                 band,
@@ -293,7 +319,11 @@ impl BusClient {
                 let Some(id) = variant_string(connection, "id") else {
                     continue;
                 };
-                profiles.push(ProfileInfo { path, id });
+                let ssid = values
+                    .get("802-11-wireless")
+                    .and_then(|wireless| variant_bytes(wireless, "ssid"))
+                    .unwrap_or_default();
+                profiles.push(ProfileInfo { path, id, ssid });
             }
         }
         profiles.sort_by(|a, b| a.id.cmp(&b.id));
@@ -304,6 +334,36 @@ impl BusClient {
             aps,
             profiles,
         })
+    }
+
+    async fn activate_profile(
+        &self,
+        connection: &OwnedObjectPath,
+        specific: &OwnedObjectPath,
+    ) -> Result<(), String> {
+        let manager = ManagerProxy::new(&self.connection)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut wifi = None;
+        for path in manager.get_devices().await.map_err(|e| e.to_string())? {
+            let device = DeviceProxy::builder(&self.connection)
+                .path(path.clone())
+                .build()
+                .await
+                .map_err(|error| error.to_string())?;
+            if device.device_type().await.unwrap_or(0) == 2 {
+                wifi = Some(path);
+                break;
+            }
+        }
+        let Some(wifi) = wifi else {
+            return Err("no Wi-Fi device".to_string());
+        };
+        manager
+            .activate_connection(connection.clone(), wifi, specific.clone())
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("activate profile: {error}"))
     }
 
     async fn delete_profile(&self, path: &OwnedObjectPath) -> Result<(), String> {
@@ -344,7 +404,12 @@ impl BusClient {
         Err("no Wi-Fi device".to_string())
     }
 
-    async fn connect_to(&self, ssid: &[u8], psk: Option<&str>) -> Result<(), String> {
+    async fn connect_to(
+        &self,
+        ssid: &[u8],
+        psk: Option<&str>,
+        specific: &OwnedObjectPath,
+    ) -> Result<(), String> {
         let manager = ManagerProxy::new(&self.connection)
             .await
             .map_err(|e| e.to_string())?;
@@ -385,9 +450,8 @@ impl BusClient {
             settings.insert("802-11-wireless-security".to_string(), security);
         }
 
-        let root = OwnedObjectPath::try_from("/").map_err(|e| e.to_string())?;
         let (_connection, _active) = manager
-            .add_and_activate_connection(settings, wifi_path, root)
+            .add_and_activate_connection(settings, wifi_path, specific.clone())
             .await
             .map_err(|error| format!("connect failed: {error}"))?;
         for _ in 0..50 {
@@ -472,6 +536,7 @@ struct Ui {
     label: gtk::Label,
     image: gtk::Image,
     snapshot: RefCell<Snapshot>,
+    last_error: RefCell<Option<String>>,
     tx: Sender<Request>,
     busy: Arc<AtomicBool>,
 }
@@ -516,6 +581,12 @@ impl Ui {
         header.set_sensitive(false);
         menu.append(&header);
 
+        if let Some(error) = self.last_error.borrow().as_ref() {
+            let item = gtk::MenuItem::with_label(&format!("Error: {error}"));
+            item.set_sensitive(false);
+            menu.append(&item);
+        }
+
         for ap in &snapshot.aps {
             let band = if ap.band.is_empty() {
                 String::new()
@@ -530,22 +601,26 @@ impl Ui {
             let item = gtk::MenuItem::with_label(&label);
             let tx = self.tx.clone();
             let ssid = ap.ssid.clone();
+            let specific = ap.path.clone();
             let privacy = ap.privacy;
             let button = self.button.clone();
             item.connect_activate(move |_| {
                 if privacy {
                     let tx = tx.clone();
                     let ssid = ssid.clone();
+                    let specific = specific.clone();
                     prompt_password(&button, move |password| {
                         let _ = tx.send(Request::Connect {
                             ssid,
                             psk: Some(password),
+                            specific,
                         });
                     });
                 } else {
                     let _ = tx.send(Request::Connect {
                         ssid: ssid.clone(),
                         psk: None,
+                        specific: specific.clone(),
                     });
                 }
             });
@@ -553,10 +628,9 @@ impl Ui {
         }
 
         if snapshot.aps.is_empty() {
-            let empty = gtk::MenuItem::with_label("No networks found — rescanning");
+            let empty = gtk::MenuItem::with_label("No networks found — press Rescan");
             empty.set_sensitive(false);
             menu.append(&empty);
-            let _ = self.tx.send(Request::Rescan);
         }
 
         if !snapshot.profiles.is_empty() {
@@ -565,13 +639,31 @@ impl Ui {
             header.set_sensitive(false);
             menu.append(&header);
             for profile in &snapshot.profiles {
-                let item = gtk::MenuItem::with_label(&format!("Forget: {}", profile.id));
+                let specific = snapshot
+                    .aps
+                    .iter()
+                    .find(|ap| ap.ssid == profile.ssid)
+                    .map(|ap| ap.path.clone())
+                    .unwrap_or_else(|| OwnedObjectPath::try_from("/").expect("root object path"));
+                let connect = gtk::MenuItem::with_label(&format!("Connect: {}", profile.id));
                 let tx = self.tx.clone();
                 let path = profile.path.clone();
-                item.connect_activate(move |_| {
+                let specific_for_connect = specific.clone();
+                connect.connect_activate(move |_| {
+                    let _ = tx.send(Request::ActivateProfile {
+                        connection: path.clone(),
+                        specific: specific_for_connect.clone(),
+                    });
+                });
+                menu.append(&connect);
+
+                let forget = gtk::MenuItem::with_label(&format!("Forget: {}", profile.id));
+                let tx = self.tx.clone();
+                let path = profile.path.clone();
+                forget.connect_activate(move |_| {
                     let _ = tx.send(Request::DeleteProfile(path.clone()));
                 });
-                menu.append(&item);
+                menu.append(&forget);
             }
         }
 
@@ -741,11 +833,36 @@ async fn worker_loop(rx: Receiver<Request>, ui_tx: Sender<UiEvent>) {
                 }
                 let _ = ui_tx.send(UiEvent::Busy(false));
             }
-            Request::Connect { ssid, psk } => {
+            Request::Connect {
+                ssid,
+                psk,
+                specific,
+            } => {
                 let _ = ui_tx.send(UiEvent::Busy(true));
                 let result = async {
                     let client = BusClient::connect().await?;
-                    client.connect_to(&ssid, psk.as_deref()).await?;
+                    client.connect_to(&ssid, psk.as_deref(), &specific).await?;
+                    client.snapshot().await
+                }
+                .await;
+                match result {
+                    Ok(snapshot) => {
+                        let _ = ui_tx.send(UiEvent::Snapshot(snapshot));
+                    }
+                    Err(error) => {
+                        let _ = ui_tx.send(UiEvent::Error(error));
+                    }
+                }
+                let _ = ui_tx.send(UiEvent::Busy(false));
+            }
+            Request::ActivateProfile {
+                connection,
+                specific,
+            } => {
+                let _ = ui_tx.send(UiEvent::Busy(true));
+                let result = async {
+                    let client = BusClient::connect().await?;
+                    client.activate_profile(&connection, &specific).await?;
                     client.snapshot().await
                 }
                 .await;
@@ -845,6 +962,7 @@ impl PanelPlugin for NetworkManagerPlugin {
             label: label.clone(),
             image: image.clone(),
             snapshot: RefCell::new(Snapshot::default()),
+            last_error: RefCell::new(None),
             tx: worker.tx.clone(),
             busy: Arc::new(AtomicBool::new(false)),
         });
@@ -876,6 +994,7 @@ impl PanelPlugin for NetworkManagerPlugin {
                     match event {
                         UiEvent::Snapshot(snapshot) => {
                             *ui.snapshot.borrow_mut() = snapshot.clone();
+                            *ui.last_error.borrow_mut() = None;
                             ui.update_label(&snapshot);
                         }
                         UiEvent::Busy(busy) => {
@@ -883,7 +1002,8 @@ impl PanelPlugin for NetworkManagerPlugin {
                             ui.button.set_sensitive(!busy);
                         }
                         UiEvent::Error(error) => {
-                            ui.label.set_text("Wi-Fi unavailable");
+                            *ui.last_error.borrow_mut() = Some(error.clone());
+                            ui.label.set_text("Wi-Fi error");
                             ui.image.set_icon_name(Some("network-wireless-offline"));
                             ui.button.set_tooltip_text(Some(&error));
                         }

@@ -347,6 +347,9 @@ impl Backend for WpaDbusBackend {
         if let Some(psk) = request.psk {
             args.insert("PSK".to_string(), owned(psk.to_string()));
         }
+        if let Some(bssid) = request.bssid.filter(|value| !value.is_empty()) {
+            args.insert("BSSID".to_string(), owned(bssid.to_string()));
+        }
         if request.hidden {
             args.insert("ScanSSID".to_string(), owned(true));
         }

@@ -121,6 +121,7 @@ pub struct ConnectRequest<'a> {
     pub ssid: &'a [u8],
     pub psk: Option<&'a str>,
     pub key_mgmt: &'a str,
+    pub bssid: Option<&'a str>,
     pub hidden: bool,
 }
 

@@ -238,6 +238,11 @@ impl Backend for WpaCtrlBackend {
             ));
         }
 
+        // A frontend can click a network while a background scan is still
+        // running. Clear the scan before SELECT_NETWORK so activation does not
+        // sit in SCANNING until the 20 s timeout.
+        let _ = self.command(request.ifname, "ABORT_SCAN").await;
+
         if let Err(error) = self
             .remove_networks_for_ssid(request.ifname, request.ssid)
             .await
@@ -257,6 +262,10 @@ impl Backend for WpaCtrlBackend {
         let ssid_hex = hex_encode(request.ssid);
         self.command(request.ifname, &format!("SET_NETWORK {id} ssid {ssid_hex}"))
             .await?;
+        if let Some(bssid) = request.bssid.filter(|value| !value.is_empty()) {
+            self.command(request.ifname, &format!("SET_NETWORK {id} bssid {bssid}"))
+                .await?;
+        }
 
         if request.key_mgmt == "NONE" {
             self.command(request.ifname, &format!("SET_NETWORK {id} key_mgmt NONE"))

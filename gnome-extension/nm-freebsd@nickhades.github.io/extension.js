@@ -120,7 +120,6 @@ class NmIndicator extends PanelMenu.Button {
         this._wifiDevice = null;
         this._proxies = new Map();
         this._profiles = [];
-        this._autoScanned = false;
         this._refreshSource = 0;
         this._refreshGeneration = 0;
         this._dialog = null;
@@ -268,12 +267,6 @@ class NmIndicator extends PanelMenu.Button {
             const profiles = await this._profilesInfo();
             if (generation !== this._refreshGeneration)
                 return;
-            if (entries.length > 0) {
-                this._autoScanned = false;
-            } else if (!this._autoScanned) {
-                this._autoScanned = true;
-                this.scan().catch(error => this._reportError(error));
-            }
             this._render(entries, activePath, profiles);
         } catch (error) {
             if (generation === this._refreshGeneration)

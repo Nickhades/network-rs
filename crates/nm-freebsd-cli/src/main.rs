@@ -41,6 +41,9 @@ enum Command {
         /// Show the settings of the profile matching this path, UUID or id.
         #[arg(long)]
         show: Option<String>,
+        /// Activate the profile matching this path, UUID or id.
+        #[arg(long)]
+        activate: Option<String>,
     },
     /// Diagnose interfaces, visible bands and driver capabilities.
     Doctor,
@@ -83,6 +86,12 @@ enum WifiCommand {
 )]
 trait Manager {
     fn get_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+    fn activate_connection(
+        &self,
+        connection: OwnedObjectPath,
+        device: OwnedObjectPath,
+        specific_object: OwnedObjectPath,
+    ) -> zbus::Result<OwnedObjectPath>;
     fn add_and_activate_connection(
         &self,
         connection: SettingsMap,
@@ -187,8 +196,19 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Status => status(&conn, &manager).await?,
         Command::Devices => devices(&conn, &manager).await?,
-        Command::Connections { delete, show } => {
-            connections(&conn, delete.as_deref(), show.as_deref()).await?
+        Command::Connections {
+            delete,
+            show,
+            activate,
+        } => {
+            connections(
+                &conn,
+                &manager,
+                delete.as_deref(),
+                show.as_deref(),
+                activate.as_deref(),
+            )
+            .await?
         }
         Command::Doctor => doctor(&conn, &manager).await?,
         Command::Wifi { command } => match command {
@@ -276,12 +296,19 @@ fn setting_string(settings: &SettingsMap, section: &str, key: &str) -> Option<St
         .and_then(|value| String::try_from(value).ok())
 }
 
-async fn connections(conn: &Connection, delete: Option<&str>, show: Option<&str>) -> Result<()> {
+async fn connections(
+    conn: &Connection,
+    manager: &ManagerProxy<'_>,
+    delete: Option<&str>,
+    show: Option<&str>,
+    activate: Option<&str>,
+) -> Result<()> {
     let settings = SettingsProxy::new(conn).await?;
     let paths = settings.list_connections().await?;
     let count = paths.len();
-    let selector = delete.or(show);
+    let selector = delete.or(show).or(activate);
     let mut matched = 0;
+    let mut selected = None;
     for path in paths {
         let profile = SettingsConnectionProxy::builder(conn)
             .path(path.clone())
@@ -302,6 +329,7 @@ async fn connections(conn: &Connection, delete: Option<&str>, show: Option<&str>
             continue;
         }
         matched += 1;
+        selected = Some(path.clone());
         if show.is_some() {
             println!("{id} ({uuid}) {path}");
             println!("{values:#?}");
@@ -313,6 +341,15 @@ async fn connections(conn: &Connection, delete: Option<&str>, show: Option<&str>
     }
     if selector.is_some() && matched == 0 {
         return Err(anyhow!("no profile matched the selector"));
+    }
+    if let Some(path) = selected
+        && activate.is_some()
+    {
+        let (device, _device_proxy, _wireless) = wifi_device(conn, manager).await?;
+        manager
+            .activate_connection(path.clone(), device, OwnedObjectPath::try_from("/")?)
+            .await?;
+        println!("activating {path}");
     }
     if selector.is_none() {
         println!("{count} saved connection(s)");

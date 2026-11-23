@@ -222,7 +222,7 @@ impl DhcpManager {
             }
         }
 
-        let (program, args) = match self.kind {
+        let (configured_program, args) = match self.kind {
             DhcpBackendKind::Dhclient => (
                 self.dhclient_path.clone(),
                 vec!["-d".to_string(), ifname.to_string()],
@@ -235,6 +235,9 @@ impl DhcpManager {
                 return Err(DhcpError::Disabled);
             }
         };
+        // daemon(8)'s PATH is often /sbin:/bin:/usr/sbin:/usr/bin, which does
+        // not include /usr/local/sbin where the package installs dhcpcd.
+        let program = resolve_executable(&configured_program).unwrap_or(configured_program);
         if !is_executable(&program) {
             return Err(DhcpError::Missing {
                 backend: self.backend(),
@@ -434,7 +437,7 @@ fn backend_name(kind: DhcpBackendKind) -> &'static str {
 fn resolve_backend(requested: &DhcpBackendKind, dhclient: &Path, dhcpcd: &Path) -> DhcpBackendKind {
     match requested {
         DhcpBackendKind::Auto => {
-            if find_in_path(dhcpcd).is_some() {
+            if resolve_executable(dhcpcd).is_some() {
                 DhcpBackendKind::Dhcpcd
             } else if is_executable(dhclient) {
                 DhcpBackendKind::Dhclient
@@ -443,11 +446,24 @@ fn resolve_backend(requested: &DhcpBackendKind, dhclient: &Path, dhcpcd: &Path) 
             }
         }
         DhcpBackendKind::Dhclient if is_executable(dhclient) => DhcpBackendKind::Dhclient,
-        DhcpBackendKind::Dhcpcd if find_in_path(dhcpcd).is_some() => DhcpBackendKind::Dhcpcd,
+        DhcpBackendKind::Dhcpcd if resolve_executable(dhcpcd).is_some() => DhcpBackendKind::Dhcpcd,
         DhcpBackendKind::Dhclient => DhcpBackendKind::Dhclient,
         DhcpBackendKind::Dhcpcd => DhcpBackendKind::Dhcpcd,
         DhcpBackendKind::Disabled => DhcpBackendKind::Disabled,
     }
+}
+
+fn resolve_executable(program: &Path) -> Option<PathBuf> {
+    if let Some(path) = find_in_path(program) {
+        return Some(path);
+    }
+    if program.components().count() != 1 {
+        return None;
+    }
+    ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/sbin"]
+        .iter()
+        .map(|dir| Path::new(dir).join(program))
+        .find(|candidate| is_executable(candidate))
 }
 
 pub fn find_in_path(program: &Path) -> Option<PathBuf> {
