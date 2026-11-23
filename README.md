@@ -53,10 +53,9 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.2.12 / main** — safe startup: the rc service defaults to
-  `--no-initial-scan` so installing/restarting the daemon does not trigger an
-  rtw89 scan panic; frontends request discovery when opened. This document
-  describes the current tree.
+- **v0.2.13 / main** — DHCP auto-selection now prefers an installed
+  `dhcpcd` and falls back to base `dhclient`; the rc service still defaults
+  to `--no-initial-scan`. This document describes the current tree.
 - Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
   GitHub releases page for their historical notes.
 
@@ -389,7 +388,7 @@ The port skeleton is in
 
 ```
 --backend auto|wpa-ctrl|wpa-dbus   wpa_supplicant transport (default auto)
---dhcp-backend auto|dhclient|dhcpcd  DHCP client (default auto, prefers base dhclient)
+--dhcp-backend auto|dhclient|dhcpcd  DHCP client (default auto; prefers dhcpcd if installed, else base dhclient)
 --dhcp-timeout SECONDS             wait for a lease before CONNECTED_SITE (default 30)
 --wpa-ctrl-dir PATH                default /var/run/wpa_supplicant
 --state-dir PATH                   profile storage, default /var/db/nm-freebsd

@@ -420,10 +420,10 @@ fn backend_name(kind: DhcpBackendKind) -> &'static str {
 fn resolve_backend(requested: &DhcpBackendKind, dhclient: &Path, dhcpcd: &Path) -> DhcpBackendKind {
     match requested {
         DhcpBackendKind::Auto => {
-            if is_executable(dhclient) {
-                DhcpBackendKind::Dhclient
-            } else if find_in_path(dhcpcd).is_some() {
+            if find_in_path(dhcpcd).is_some() {
                 DhcpBackendKind::Dhcpcd
+            } else if is_executable(dhclient) {
+                DhcpBackendKind::Dhclient
             } else {
                 DhcpBackendKind::Disabled
             }

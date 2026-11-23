@@ -40,9 +40,9 @@
 
 ## 版本历史
 
-- **v0.2.12 / main** — 安全启动：rc 服务默认
-  <code>--no-initial-scan</code>，安装/重启 daemon 不再自动触发 rtw89 扫描
-  panic；前端在打开菜单时请求发现。本文档描述当前代码。
+- **v0.2.13 / main** — DHCP 自动选择优先已安装的
+  <code>dhcpcd</code>，否则回退 base <code>dhclient</code>；rc 服务仍默认
+  <code>--no-initial-scan</code>。本文档描述当前代码。
 - 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
   历史说明见 GitHub releases。
 
@@ -320,7 +320,7 @@ Port 的 <code>cargo-crates.mk</code> 由
 ### 守护进程选项
 
     --backend auto|wpa-ctrl|wpa-dbus   wpa_supplicant 传输方式（默认 auto）
-    --dhcp-backend auto|dhclient|dhcpcd  DHCP 客户端（默认 auto，优先 base dhclient）
+    --dhcp-backend auto|dhclient|dhcpcd  DHCP 客户端（默认 auto，优先已安装的 dhcpcd，否则 base dhclient）
     --dhcp-timeout SECONDS             等待租约后降级到 CONNECTED_SITE 的秒数（默认 30）
     --wpa-ctrl-dir PATH                默认 /var/run/wpa_supplicant
     --state-dir PATH                   配置存储，默认 /var/db/nm-freebsd
