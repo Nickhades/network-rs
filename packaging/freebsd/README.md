@@ -30,8 +30,8 @@ source install stay consistent.
 
 ## Installing the port skeleton
 
-Copy ports/net-mgmt/nm-freebsd to a ports tree as net-mgmt/nm-freebsd, set a
-real GH_ACCOUNT/MAINTAINER, then run:
+Copy ports/net-mgmt/nm-freebsd to a ports tree as net-mgmt/nm-freebsd, set
+MAINTAINER to a real address (GH_ACCOUNT already points at Nickhades), then run:
 
     make makesum
     make install clean

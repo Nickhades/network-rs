@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Shared D-Bus names, constants and small helpers for the NetworkManager FreeBSD compatibility layer"
 
 [dependencies]

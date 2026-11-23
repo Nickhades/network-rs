@@ -4,7 +4,7 @@ CATEGORIES=	net-mgmt
 
 MAINTAINER=	zxy@example.com
 COMMENT=	NetworkManager D-Bus compatibility layer for FreeBSD
-WWW=		https://github.com/network-rs/network-rs
+WWW=		https://github.com/Nickhades/network-rs
 
 LICENSE=	BSD2CLAUSE
 LICENSE_FILE=	${WRKSRC}/LICENSE
@@ -15,7 +15,7 @@ RUN_DEPENDS=	${LOCALBASE}/bin/dbus-daemon:devel/dbus
 USES=		cargo dbus
 USE_RC_SUBR=	nm_freebsd
 USE_GITHUB=	yes
-GH_ACCOUNT=	network-rs
+GH_ACCOUNT=	Nickhades
 GH_PROJECT=	network-rs
 GH_TAGNAME=	v${DISTVERSION}
 

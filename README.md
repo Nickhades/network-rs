@@ -1,5 +1,7 @@
 # nm-freebsd
 
+Repository: <https://github.com/Nickhades/network-rs>
+
 A native FreeBSD implementation of the NetworkManager D-Bus service, written in
 Rust. The daemon owns `org.freedesktop.NetworkManager` on the system bus and
 serves the object tree that desktop frontends already understand. Real network

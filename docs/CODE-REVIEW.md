@@ -77,8 +77,9 @@ this repository. This is a working review, not a formal security audit.
 - The isolated desktop test clicks a fixed panel coordinate and requires a real
   `wlan0` for device enumeration; it is a test harness, not a general UI
   automation framework.
-- The port skeleton has placeholder `GH_ACCOUNT`/`MAINTAINER` and no
-  `distinfo`; run `make makesum` in a real ports tree.
+- The port skeleton has a placeholder `MAINTAINER` and no `distinfo`; run
+  `make makesum` in a real ports tree. `GH_ACCOUNT` now points at
+  `Nickhades/network-rs`.
 - Full root installation was not executed in this environment (no sudo
   password). The same code path was validated with `--destdir`, and the
   service/smoke/desktop paths were validated on private buses.
