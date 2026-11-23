@@ -397,6 +397,23 @@ if [ -z "$destdir" ]; then
 fi
 
 if [ "$smoke" -eq 1 ] && [ "$start" -eq 1 ] && [ -z "$destdir" ]; then
+    # service start returns as soon as daemon(8) forks; the daemon still has to
+    # scan devices and request the well-known bus name.  Do not race that.
+    if command -v gdbus >/dev/null 2>&1; then
+        i=0
+        while [ "$i" -lt 30 ]; do
+            if gdbus introspect --system \
+                --dest org.freedesktop.NetworkManager \
+                --object-path /org/freedesktop/NetworkManager >/dev/null 2>&1; then
+                break
+            fi
+            i=$((i + 1))
+            sleep 1
+        done
+        if [ "$i" -ge 30 ]; then
+            echo "install: daemon did not acquire org.freedesktop.NetworkManager after 30s" >&2
+        fi
+    fi
     if [ "$plugin" -eq 1 ]; then
         if ! "$root/scripts/smoke-test.sh" --plugin --prefix "$prefix"; then
             echo "install: smoke test failed" >&2

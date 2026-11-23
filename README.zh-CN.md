@@ -143,6 +143,16 @@ activation service、rc.d 脚本和 dhclient hook，然后启动服务并运行�
 
 安装器会备份/恢复 <code>/etc/dhclient-exit-hooks</code>。
 
+如果 smoke 仍报 <code>org.freedesktop.NetworkManager</code> 不可达，先看
+<code>sudo tail -50 /var/log/nm_freebsd.log</code>，再执行：
+
+    sudo service dbus restart
+    sudo service nm_freebsd start
+    sudo service nm_freebsd status
+
+安装器现在会在 smoke 前最多等待 30 秒让 daemon 注册总线名。
+<code>service</code> 状态检查请用 root；PID 文件是 root-only。
+
 ### 构建并安装
 
     sudo scripts/install.sh                  # 依赖检查、构建、安装、启用/启动、冒烟

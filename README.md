@@ -180,6 +180,19 @@ xfce4-panel -r
 Use `sudo ./uninstall-oneclick.sh` to remove it. The generated
 `/etc/dhclient-exit-hooks` block is backed up/restored by the installer.
 
+If smoke still reports that `org.freedesktop.NetworkManager` is unreachable,
+the daemon may have failed to start or the bus policy was not reloaded. Check
+`sudo tail -50 /var/log/nm_freebsd.log`, then run:
+
+```sh
+sudo service dbus restart
+sudo service nm_freebsd start
+sudo service nm_freebsd status
+```
+
+The installer now waits up to 30 seconds for the bus name before running smoke.
+Run `service` status checks as root; the PID file is root-only.
+
 ### Build-and-install
 
 ```sh
