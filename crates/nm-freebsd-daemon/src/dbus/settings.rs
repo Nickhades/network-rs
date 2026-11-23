@@ -49,7 +49,7 @@ impl SettingsIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
-        let owner_uid = auth::require_admin_uid(bus, header, "AddConnection").await?;
+        let owner_uid = auth::caller_uid(bus, header).await?;
         self.core
             .add_connection_from_settings(connection, true, Some(owner_uid))
             .await
@@ -62,7 +62,7 @@ impl SettingsIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<OwnedObjectPath> {
-        let owner_uid = auth::require_admin_uid(bus, header, "AddConnectionUnsaved").await?;
+        let owner_uid = auth::caller_uid(bus, header).await?;
         self.core
             .add_connection_from_settings(connection, false, Some(owner_uid))
             .await
@@ -76,7 +76,8 @@ impl SettingsIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<bool> {
-        auth::require_admin(bus, header, "UpdateConnection").await?;
+        let owner_uid = self.core.connection_owner_uid(&connection).await;
+        auth::require_settings_write_access(bus, header, owner_uid, "UpdateConnection").await?;
         self.core
             .update_connection_settings(&connection, settings, true)
             .await
@@ -89,7 +90,8 @@ impl SettingsIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
-        auth::require_admin(bus, header, "DeleteConnection").await?;
+        let owner_uid = self.core.connection_owner_uid(&connection).await;
+        auth::require_settings_write_access(bus, header, owner_uid, "DeleteConnection").await?;
         self.core
             .delete_connection(&connection)
             .await
@@ -173,7 +175,12 @@ impl SettingsConnectionIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
-        auth::require_admin(bus, header, "Settings.Update").await?;
+        let owner_uid = self
+            .core
+            .connection_owner_uid_by_uuid(&self.uuid)
+            .await
+            .map_err(fdo::Error::from)?;
+        auth::require_settings_write_access(bus, header, owner_uid, "Settings.Update").await?;
         self.core
             .update_connection_by_uuid(&self.uuid, settings, true)
             .await
@@ -186,7 +193,13 @@ impl SettingsConnectionIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
-        auth::require_admin(bus, header, "Settings.UpdateUnsaved").await?;
+        let owner_uid = self
+            .core
+            .connection_owner_uid_by_uuid(&self.uuid)
+            .await
+            .map_err(fdo::Error::from)?;
+        auth::require_settings_write_access(bus, header, owner_uid, "Settings.UpdateUnsaved")
+            .await?;
         self.core
             .update_connection_by_uuid(&self.uuid, settings, false)
             .await
@@ -198,7 +211,12 @@ impl SettingsConnectionIface {
         #[zbus(connection)] bus: &Connection,
         #[zbus(header)] header: Header<'_>,
     ) -> fdo::Result<()> {
-        auth::require_admin(bus, header, "Settings.Delete").await?;
+        let owner_uid = self
+            .core
+            .connection_owner_uid_by_uuid(&self.uuid)
+            .await
+            .map_err(fdo::Error::from)?;
+        auth::require_settings_write_access(bus, header, owner_uid, "Settings.Delete").await?;
         self.core
             .delete_connection_by_uuid(&self.uuid)
             .await

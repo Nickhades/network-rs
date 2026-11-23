@@ -94,8 +94,11 @@ dispatcher 已经持有该接口的读锁，而处理函数又等待同一个对
    send 权限；其他本地用户只允许明确的只读方法（<code>Properties.Get/GetAll</code>、
    Manager 查询、AP 发现/扫描、不含密钥的 settings 元数据）。
 2. <code>auth.rs</code> 通过 <code>org.freedesktop.DBus.GetConnectionUnixUser</code>
-   解析 caller 的 Unix uid，检查 root 或上述组成员资格。守护进程实现的每个修改类方法都调用
-   <code>require_admin</code>；<code>GetPermissions</code> 把同样的判断返回给前端。
+   解析 caller 的 Unix uid。activation/deactivation/Device.Disconnect/GetSecrets
+   允许 profile owner 或管理员；settings Update/Delete 允许 owner 或管理员；
+   Enable/Sleep 和整机操作仍调用 <code>require_admin</code>。
+   <code>GetPermissions</code> 返回整机控制权限和 <code>settings-modify-own=yes</code>，
+   不表达 per-profile ownership。
    <code>GetSecrets</code> 允许 profile owner 或管理员。
 3. 保存的 PSK 位于 <code>/var/db/nm-freebsd/keyring.json</code>（0600），与 0600 的
    profile JSON 分离。旧 profile 中的明文 <code>psk</code> 在加载时迁移。

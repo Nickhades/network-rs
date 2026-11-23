@@ -119,9 +119,11 @@ Access control has three layers:
    `org.freedesktop.DBus.GetConnectionUnixUser`. `ActivateConnection`,
    `DeactivateConnection`, `Device.Disconnect` and `GetSecrets` allow the
    profile owner or an administrator. `AddAndActivateConnection[2]` creates a
-   profile owned by the caller. Settings writes, `Enable` and `Sleep` still
+   profile owned by the caller. Settings `Update`/`Delete` allow the profile
+   owner or an administrator; `Enable`, `Sleep` and host-wide operations still
    call `require_admin`. `GetPermissions` is intentionally coarse and reports
-   machine-wide control, not per-profile ownership.
+   machine-wide control (plus `settings-modify-own=yes`), not per-profile
+   ownership.
 3. Saved PSKs live in `/var/db/nm-freebsd/keyring.json` (0600), separate from
    the 0600 profile JSON. Legacy plaintext `psk` fields are migrated on load.
    The keyring is not encrypted at rest; root can read it, so this is a

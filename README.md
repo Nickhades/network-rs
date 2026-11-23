@@ -7,9 +7,9 @@ Repository: <https://github.com/Nickhades/network-rs>
 > ### Security warning: do not install this on a multi-user system yet
 >
 > This MVP has no polkit and no SecretAgent. Root and members of
-> `wheel`/`network` have full control. A profile owner can activate and
-> deactivate that profile and read its secrets; other local users are
-> read-only. Settings writes and machine-wide enable/sleep still require an
+> `wheel`/`network` have full control. A profile owner can create, edit,
+> delete, activate and deactivate that profile and read its secrets; other
+> local users are read-only. Machine-wide enable/sleep still requires an
 > administrator group: `pw groupmod network -m <user>` (then log out and back
 > in). The daemon runs as root and can change machine-wide Wi-Fi settings.
 > Saved Wi-Fi passphrases live in `/var/db/nm-freebsd/keyring.json` (mode 0600)
@@ -53,9 +53,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.2.9 / main** — owner/admin activation and disconnection,
-  owner-scoped `GetSecrets`, hidden SSID profiles, band display/doctor, and
-  DHCP-client conflict detection. This document describes the current tree.
+- **v0.2.10 / main** — owner/admin activation, disconnection and settings
+  writes, owner-scoped `GetSecrets`, hidden SSID profiles, band
+  display/doctor, and DHCP-client conflict detection. This document describes
+  the current tree.
 - Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
   GitHub releases page for their historical notes.
 
@@ -425,8 +426,9 @@ may:
   caller and then activates it;
 - read manager/device/AP properties, list settings without secrets, and scan.
 
-Settings writes (`AddConnection`, `Update`, `Delete`), `Enable`, `Sleep`,
-and machine-wide operations still require `wheel`/`network`. A legacy profile
+Profile creation and `Update`/`Delete` are allowed for the profile owner or
+an administrator; `Enable`, `Sleep` and machine-wide operations still require
+`wheel`/`network`. A legacy profile
 with no `owner_uid` is administrator-only. The D-Bus policy allows the
 owner-routed calls through; the daemon performs the owner/admin decision.
 

@@ -88,6 +88,32 @@ pub fn activation_access_allowed(caller_uid: u32, owner_uid: Option<u32>, admin:
     admin || owner_uid == Some(caller_uid)
 }
 
+pub async fn require_settings_write_access(
+    connection: &Connection,
+    header: Header<'_>,
+    owner_uid: Option<u32>,
+    operation: &str,
+) -> fdo::Result<()> {
+    let uid = caller_uid(connection, header).await?;
+    if settings_write_access_allowed(uid, owner_uid, is_admin_uid(uid)) {
+        Ok(())
+    } else {
+        tracing::warn!(
+            uid,
+            ?owner_uid,
+            operation,
+            "denied settings write to a profile owned by another user"
+        );
+        Err(fdo::Error::AccessDenied(format!(
+            "{operation} requires the profile owner or an administrator"
+        )))
+    }
+}
+
+pub fn settings_write_access_allowed(caller_uid: u32, owner_uid: Option<u32>, admin: bool) -> bool {
+    admin || owner_uid == Some(caller_uid)
+}
+
 pub async fn require_secret_access(
     connection: &Connection,
     header: Header<'_>,
@@ -154,11 +180,10 @@ pub async fn permissions(
 
 /// Operations that the daemon does not implement at all. Reporting "yes"
 /// here would make a frontend show controls that cannot work.
-const UNSUPPORTED: [&str; 4] = [
+const UNSUPPORTED: [&str; 3] = [
     "org.freedesktop.NetworkManager.enable-disable-wwan",
     "org.freedesktop.NetworkManager.wifi-share",
     "org.freedesktop.NetworkManager.wifi-share-open",
-    "org.freedesktop.NetworkManager.settings-modify-own",
 ];
 
 pub fn permission_map(admin: bool) -> HashMap<String, String> {
@@ -166,8 +191,10 @@ pub fn permission_map(admin: bool) -> HashMap<String, String> {
         .iter()
         .map(|name| {
             let supported = !UNSUPPORTED.contains(name);
-            let allowed =
-                supported && (admin || *name == "org.freedesktop.NetworkManager.wifi-scan");
+            let allowed = supported
+                && (admin
+                    || *name == "org.freedesktop.NetworkManager.wifi-scan"
+                    || *name == "org.freedesktop.NetworkManager.settings-modify-own");
             (
                 (*name).to_string(),
                 if allowed { "yes" } else { "no" }.to_string(),
@@ -306,6 +333,14 @@ mod tests {
     }
 
     #[test]
+    fn settings_write_is_owner_or_admin() {
+        assert!(settings_write_access_allowed(1001, Some(1001), false));
+        assert!(!settings_write_access_allowed(1002, Some(1001), false));
+        assert!(!settings_write_access_allowed(1001, None, false));
+        assert!(settings_write_access_allowed(1002, Some(1001), true));
+    }
+
+    #[test]
     fn secret_access_is_owner_or_admin() {
         assert!(secret_access_allowed(1001, Some(1001), false));
         assert!(!secret_access_allowed(1002, Some(1001), false));
@@ -329,7 +364,11 @@ mod tests {
         assert_eq!(admin["org.freedesktop.NetworkManager.wifi-share"], "no");
         assert_eq!(
             admin["org.freedesktop.NetworkManager.settings-modify-own"],
-            "no"
+            "yes"
+        );
+        assert_eq!(
+            admin["org.freedesktop.NetworkManager.settings-modify-system"],
+            "yes"
         );
 
         let user = permission_map(false);
@@ -337,5 +376,13 @@ mod tests {
         assert_eq!(user["org.freedesktop.NetworkManager.wifi-scan"], "yes");
         assert_eq!(user["org.freedesktop.NetworkManager.network-control"], "no");
         assert_eq!(user["org.freedesktop.NetworkManager.wifi-connect"], "no");
+        assert_eq!(
+            user["org.freedesktop.NetworkManager.settings-modify-own"],
+            "yes"
+        );
+        assert_eq!(
+            user["org.freedesktop.NetworkManager.settings-modify-system"],
+            "no"
+        );
     }
 }

@@ -8,8 +8,8 @@
 >
 > 这个 MVP 没有 polkit，也没有 SecretAgent。root 和
 > <code>wheel</code>/<code>network</code> 组成员拥有完整控制权；profile owner
-> 可以激活/断开自己的 profile 并读取自己的密钥，其他本地用户只读。
-> settings 写入和整机 enable/sleep 仍需要管理员组：
+> 可以创建、编辑、删除、激活/断开自己的 profile 并读取自己的密钥，
+> 其他本地用户只读。整机 enable/sleep 仍需要管理员组：
 > <code>pw groupmod network -m &lt;user&gt;</code>，然后注销并重新登录。
 > 守护进程以 root 运行，可以修改整台机器的 Wi-Fi 配置。
 > 保存的 Wi-Fi 密码放在 <code>/var/db/nm-freebsd/keyring.json</code>（权限 0600），
@@ -40,7 +40,7 @@
 
 ## 版本历史
 
-- **v0.2.9 / main** — owner/admin 激活与断开、owner 范围的
+- **v0.2.10 / main** — owner/admin 激活、断开与 settings 写入、owner 范围的
   <code>GetSecrets</code>、隐藏 SSID、频段/doctor 诊断，以及 DHCP 客户端冲突检测。
   本文档描述当前代码。
 - 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
@@ -352,8 +352,8 @@ root 和 <code>wheel</code>/<code>network</code> 组成员拥有完整方法访�
 - 调用 <code>AddAndActivateConnection[2]</code>，创建归自己所有的 profile 并激活；
 - 读取 Manager/Device/AP 属性、列出不含密钥的 settings、发起扫描。
 
-settings 写入（<code>AddConnection</code>、<code>Update</code>、<code>Delete</code>）、
-<code>Enable</code>、<code>Sleep</code> 和整机操作仍要求
+profile owner 或管理员可以创建、<code>Update</code>、<code>Delete</code>
+自己的 profile；<code>Enable</code>、<code>Sleep</code> 和整机操作仍要求
 <code>wheel</code>/<code>network</code>。没有 <code>owner_uid</code> 的旧 profile
 仍仅限管理员。D-Bus 策略允许 owner 路径进入 daemon，由 daemon 做 owner/admin 判定。
 

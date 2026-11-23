@@ -72,7 +72,8 @@ lease hook，以及尚未在真实 plasma-nm/GNOME 面板上验证。自动测�
   <code>fi.w1.wpa_supplicant1</code> 服务上运行（stock FreeBSD 没有）；mock 测试覆盖协议链路。
 - 尚未测试真实 plasma-nm 和 GNOME 面板；XFCE 已在隔离的真实面板中测试。
 - 完整 D-Bus 控制仍限制到 <code>wheel</code>/<code>network</code>；profile owner
-  可以激活/断开自己的 profile 并读取自己的密钥。settings 写入仍要求管理员组。
+  可以激活/断开自己的 profile、编辑/删除自己的 profile 并读取自己的密钥。
+  Enable/Sleep 和整机设置仍要求管理员组。
   仍然没有 polkit/SecretAgent。keyring 是独立的 0600 文件，但没有静态加密，
   root（以及能读取 root 文件的人）可以恢复 PSK。
 - 不属于 <code>wheel</code>/<code>network</code> 的桌面用户可以管理自己的 profile，
