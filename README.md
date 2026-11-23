@@ -75,6 +75,9 @@ Working, tested MVP on FreeBSD 15.1-RELEASE (amd64):
   dhclient reuse, exit-hook lease events, IP4Config gateway, and wired DHCP
   (process/hook paths are simulated in tests; a live root DHCP test remains
   manual);
+- Phase 3 signal regression: standard `PropertiesChanged` on Device/AP/
+  IP4Config, AP `Strength` changes, and a Device `StateChanged` sequence
+  ending at `ACTIVATED`;
 - one-click install, dependency check, compile/test, read-only smoke test and
   isolated desktop-test scripts are included.
 

@@ -213,6 +213,7 @@ struct FakeWpa {
     dir: TempDir,
     commands: Arc<Mutex<Vec<String>>>,
     selected: Arc<AtomicBool>,
+    signal: Arc<Mutex<i16>>,
 }
 
 impl FakeWpa {
@@ -225,8 +226,10 @@ impl FakeWpa {
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666))?;
         let commands = Arc::new(Mutex::new(Vec::new()));
         let selected = Arc::new(AtomicBool::new(false));
+        let signal = Arc::new(Mutex::new(-42i16));
         let commands_thread = commands.clone();
         let selected_thread = selected.clone();
+        let signal_thread = signal.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             while let Ok((n, addr)) = listener.recv_from(&mut buf) {
@@ -236,11 +239,12 @@ impl FakeWpa {
                 }
                 commands_thread.lock().unwrap().push(command.clone());
                 let response = if command == "SCAN_RESULTS" {
-                    String::from(
+                    let level = *signal_thread.lock().unwrap();
+                    format!(
                         "bssid / frequency / signal level / flags / ssid
-aa:bb:cc:dd:ee:01	2412	-42	[WPA2-PSK-CCMP][ESS]	Cafe WiFi
-aa:bb:cc:dd:ee:02	5180	-77	[ESS]	Open Net
-",
+                         aa:bb:cc:dd:ee:01	2412	{level}	[WPA2-PSK-CCMP][ESS]	Cafe WiFi
+                         aa:bb:cc:dd:ee:02	5180	-77	[ESS]	Open Net
+"
                     )
                 } else if command == "STATUS" {
                     if selected_thread.load(Ordering::SeqCst) {
@@ -289,6 +293,7 @@ key_mgmt=WPA2-PSK
             dir,
             commands,
             selected,
+            signal,
         })
     }
 
@@ -298,6 +303,10 @@ key_mgmt=WPA2-PSK
 
     fn commands(&self) -> Vec<String> {
         self.commands.lock().unwrap().clone()
+    }
+
+    fn set_signal(&self, value: i16) {
+        *self.signal.lock().unwrap() = value;
     }
 }
 
@@ -439,6 +448,55 @@ async fn mvp_end_to_end() {
     assert!(first.strength().await.unwrap() >= 90);
     assert_eq!(first.flags().await.unwrap() & 1, 1);
 
+    // Standard PropertiesChanged on an AccessPoint when the BSS signal level
+    // changes. This is the signal path used by plasma-nm/GNOME signal meters.
+    let props = zbus::fdo::PropertiesProxy::builder(&conn)
+        .destination("org.freedesktop.NetworkManager")
+        .path(aps[0].clone())
+        .build()
+        .await
+        .expect("AP properties proxy");
+    let mut changes = props
+        .receive_properties_changed()
+        .await
+        .expect("AP PropertiesChanged stream");
+    fake.set_signal(-70);
+    wireless
+        .request_scan(HashMap::new())
+        .await
+        .expect("second scan");
+    let strength = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(signal) = changes.next().await {
+            let Ok(args) = signal.args() else {
+                continue;
+            };
+            if args.interface_name().as_str() == "org.freedesktop.NetworkManager.AccessPoint"
+                && let Some(value) = args.changed_properties().get("Strength")
+                && let Ok(value) = OwnedVariant::try_from(value.clone())
+            {
+                return u8::try_from(value).ok();
+            }
+        }
+        None
+    })
+    .await
+    .expect("timed out waiting for AP Strength PropertiesChanged")
+    .expect("PropertiesChanged did not contain a u8 Strength");
+    assert_eq!(strength, 60);
+
+    let device_signals = zbus::Proxy::new(
+        &conn,
+        "org.freedesktop.NetworkManager",
+        device_path.as_str(),
+        "org.freedesktop.NetworkManager.Device",
+    )
+    .await
+    .expect("device signal proxy");
+    let mut device_states = device_signals
+        .receive_signal("StateChanged")
+        .await
+        .expect("device StateChanged stream");
+
     let mut connection = HashMap::new();
     connection.insert("id".to_string(), owned("Cafe WiFi".to_string()));
     connection.insert("uuid".to_string(), owned(uuid::Uuid::new_v4().to_string()));
@@ -480,6 +538,31 @@ async fn mvp_end_to_end() {
     })
     .await;
     assert!(activated, "activation did not complete");
+    let state_sequence = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut seen = Vec::new();
+        while let Some(message) = device_states.next().await {
+            let Ok((new_state, _old, _reason)) = message.body().deserialize::<(u32, u32, u32)>()
+            else {
+                continue;
+            };
+            seen.push(new_state);
+            if new_state == 100 {
+                break;
+            }
+        }
+        seen
+    })
+    .await
+    .expect("timed out collecting Device.StateChanged");
+    assert!(
+        state_sequence.contains(&70),
+        "missing IP_CONFIG in Device.StateChanged: {state_sequence:?}"
+    );
+    assert_eq!(
+        state_sequence.last(),
+        Some(&100),
+        "Device.StateChanged did not end ACTIVATED: {state_sequence:?}"
+    );
     assert_eq!(
         manager.active_connections().await.unwrap(),
         vec![active_path.clone()]

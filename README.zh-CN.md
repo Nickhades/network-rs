@@ -56,6 +56,9 @@
 - Phase 2 DHCP：默认 base <code>dhclient</code>、可选 <code>dhcpcd</code>、
   复用系统 dhclient、exit-hook 租约事件、IP4Config Gateway、有线 DHCP
   （进程/hook 路径在测试中模拟；真实 root DHCP 测试仍为手动）；
+- Phase 3 信号回归：Device/AP/IP4Config 的标准 <code>PropertiesChanged</code>、
+  AP <code>Strength</code> 变化，以及以 <code>ACTIVATED</code> 结尾的 Device
+  <code>StateChanged</code> 序列；
 - 一键安装、依赖检查、编译测试、只读冒烟测试和隔离桌面测试脚本。
 
 尚未在真实的 plasma-nm 或 GNOME 网络面板上做 FreeBSD 兼容测试；这是下一阶段的兼容性目标。参见[限制与路线图](#限制与路线图)。

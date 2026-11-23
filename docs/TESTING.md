@@ -60,6 +60,10 @@ The integration test is self-contained:
    - `Settings.ListConnections`/`GetConnection` round-trip;
    - `GetPermissions` returns all 11 permission keys and `wifi-scan = yes`
      (admin/read-only decisions are unit-tested separately);
+   - an AP `Strength` change emits the standard
+     `org.freedesktop.DBus.Properties.PropertiesChanged` on the AP path;
+   - the Device `StateChanged` sequence contains `IP_CONFIG` (70) and ends
+     at `ACTIVATED` (100);
    - `DeactivateConnection` returns the device to state 30 and the daemon to
      20;
    - a simulated `Dhcp.Notify` BOUND event publishes IP4Config with address

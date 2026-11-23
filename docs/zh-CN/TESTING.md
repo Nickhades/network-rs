@@ -55,6 +55,10 @@
    - <code>Settings.ListConnections</code>/<code>GetConnection</code> round-trip；
    - <code>GetPermissions</code> 返回全部 11 个权限键，且
      <code>wifi-scan = yes</code>（管理员/只读判断由单元测试覆盖）；
+   - AP <code>Strength</code> 变化在 AP 路径上发出标准
+     <code>org.freedesktop.DBus.Properties.PropertiesChanged</code>；
+   - Device <code>StateChanged</code> 序列包含 <code>IP_CONFIG</code> (70)，
+     并以 <code>ACTIVATED</code> (100) 结束；
    - <code>DeactivateConnection</code> 后设备回到 30、Manager 回到 20；
    - 模拟 <code>Dhcp.Notify</code> BOUND 事件，发布地址 10.99.0.2/24 和
      Gateway 10.99.0.1（hook 数据路径）。
