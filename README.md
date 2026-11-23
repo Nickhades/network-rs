@@ -53,9 +53,10 @@ plasma-nm / GNOME network panel / XFCE panel plugin
 
 ## Version history
 
-- **v0.2.11 / main** — unified frontend alignment: band labels, saved-profile
-  deletion, and CLI profile show/delete on top of owner-scoped backend writes.
-  This document describes the current tree.
+- **v0.2.12 / main** — safe startup: the rc service defaults to
+  `--no-initial-scan` so installing/restarting the daemon does not trigger an
+  rtw89 scan panic; frontends request discovery when opened. This document
+  describes the current tree.
 - Earlier releases (`v0.1.0`–`v0.2.8`) remain available as Git tags; see the
   GitHub releases page for their historical notes.
 
@@ -195,6 +196,23 @@ sudo service nm_freebsd status
 ```
 
 The installer now waits up to 30 seconds for the bus name before running smoke.
+The rc service starts with `--no-initial-scan` by default. This avoids
+triggering a driver scan/panic during install or reboot; opening the frontend
+requests discovery. Re-enable the startup scan explicitly with:
+
+```sh
+sysrc nm_freebsd_initial_scan=YES
+```
+
+To use dhcpcd as the daemon's DHCP backend instead of base dhclient:
+
+```sh
+sysrc nm_freebsd_args="--dhcp-backend dhcpcd"
+```
+
+Stop dhclient (or the system dhcpcd service) first; v0.2.8+ detects an external
+DHCP client and refuses to start a second one.
+
 Run `service` status checks as root; the PID file is root-only.
 
 ### Build-and-install

@@ -46,4 +46,13 @@ stop_cmd="nm_freebsd_cleanup"
 
 load_rc_config $name
 : ${nm_freebsd_enable:="NO"}
+
+# rtw89 and some other FreeBSD Wi-Fi drivers can panic during a scan. Do not
+# scan automatically on service start; opening the frontend (or an explicit
+# nm-freebsd-cli wifi list --scan) requests discovery when the user asks.
+: ${nm_freebsd_initial_scan:="NO"}
+case "$nm_freebsd_initial_scan" in
+    [Nn][Oo]|0|"") command_args="$command_args --no-initial-scan" ;;
+esac
+
 run_rc_command "$1"

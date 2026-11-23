@@ -40,9 +40,9 @@
 
 ## 版本历史
 
-- **v0.2.11 / main** — 前端统一适配：频段标签、已保存 profile 删除，以及
-  CLI profile 查看/删除，底层使用 owner 范围的后端写入权限。
-  本文档描述当前代码。
+- **v0.2.12 / main** — 安全启动：rc 服务默认
+  <code>--no-initial-scan</code>，安装/重启 daemon 不再自动触发 rtw89 扫描
+  panic；前端在打开菜单时请求发现。本文档描述当前代码。
 - 更早的版本（<code>v0.1.0</code>–<code>v0.2.8</code>）保留为 Git tag；
   历史说明见 GitHub releases。
 
@@ -154,6 +154,18 @@ activation service、rc.d 脚本和 dhclient hook，然后启动服务并运行�
     sudo service nm_freebsd status
 
 安装器现在会在 smoke 前最多等待 30 秒让 daemon 注册总线名。
+rc 服务默认使用 <code>--no-initial-scan</code>，避免安装/重启时自动扫描
+触发驱动 panic；前端打开菜单时再请求发现。要恢复启动时扫描：
+
+    sysrc nm_freebsd_initial_scan=YES
+
+要让 daemon 使用 dhcpcd 而不是 base dhclient：
+
+    sysrc nm_freebsd_args="--dhcp-backend dhcpcd"
+
+切换前先停掉 dhclient（或系统 dhcpcd 服务）；v0.2.8+ 会检测外部 DHCP 客户端，
+不会再启动第二个。
+
 <code>service</code> 状态检查请用 root；PID 文件是 root-only。
 
 ### 构建并安装
