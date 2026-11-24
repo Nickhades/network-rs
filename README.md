@@ -1,5 +1,11 @@
 # nm-freebsd
 
+> ## Archived
+>
+> This repository is archived. Development has moved to
+> [Nickhades/rs-network-freebsd](https://github.com/Nickhades/rs-network-freebsd).
+> The code here is kept as historical reference and is no longer maintained.
+
 **Languages:** [English](README.md) | [简体中文](README.zh-CN.md)
 
 Repository: <https://github.com/Nickhades/network-rs>

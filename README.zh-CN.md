@@ -1,5 +1,11 @@
 # nm-freebsd
 
+> ## 已归档
+>
+> 本仓库已归档，后续开发迁移到
+> [Nickhades/rs-network-freebsd](https://github.com/Nickhades/rs-network-freebsd)。
+> 这里仅保留历史代码，不再维护。
+
 **语言：** [English](README.md) | [简体中文](README.zh-CN.md)
 
 仓库：<https://github.com/Nickhades/network-rs>
